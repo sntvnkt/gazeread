@@ -1001,7 +1001,12 @@
   $('stopBtn').addEventListener('click', stopSpeech);
 
   // ---------------- проследяване ----------------
-  const tracking = { active: false, mode: null, calibrated: false, distanceChanged: false, faceVisible: null };
+  const tracking = { active: false, mode: null, calibrated: false, distanceChanged: false, faceVisible: null, glareWarning: false, eyeWarning: false };
+  let calibrationProgressText = '';
+  function setCalibrationProgress(text) {
+    calibrationProgressText = text;
+    $('calibProgress').textContent = text;
+  }
   addEventListener('resize', () => {
     if (!tracking.calibrating && window.GazeEngine) window.GazeEngine.resizeTargets(innerWidth, innerHeight);
   });
@@ -1325,8 +1330,14 @@
     const lostFace = tracking.faceVisible === true && !st.face;
     const foundFace = tracking.faceVisible === false && st.face;
     const distanceChanged = tracking.distanceChanged !== !!st.distanceChanged;
+    const glareWarning = !!st.glareBoth || Math.max(st.glareLeft || 0, st.glareRight || 0) > 0.04;
+    const glareChanged = tracking.glareWarning !== glareWarning;
+    const eyeWarning = !!st.face && st.eyeQuality < 0.3;
+    const eyeChanged = tracking.eyeWarning !== eyeWarning;
     tracking.faceVisible = !!st.face;
     tracking.distanceChanged = !!st.distanceChanged;
+    tracking.glareWarning = glareWarning;
+    tracking.eyeWarning = eyeWarning;
     if (lostFace) {
       lastPoint = null; dotPos = null; lastFrame = 0;
       scores.clear(); lineState.line = null; lineState.pending = null; lineState.pendingT = 0; drift.y = 0;
@@ -1335,17 +1346,37 @@
     }
     if (!calib.classList.contains('show') && tracking.mode === 'camera') {
       if (lostFace) setStatus('busy', 'Не виждам лице – погледни към камерата');
+      else if (glareWarning && (glareChanged || foundFace || distanceChanged)) setStatus('busy',
+        st.glareBoth ? 'Отражение закрива двете очи – промени ъгъла на светлината'
+          : 'Отражение в едната леща – проследяването използва по-ясното око');
+      else if (eyeWarning && (eyeChanged || foundFace || distanceChanged)) setStatus('busy',
+        'Камерата не вижда очите ясно – подобри светлината или избери по-добра камера');
       else if (foundFace) setStatus(st.distanceChanged ? 'busy' : 'on',
+        st.distanceChanged ? 'Позицията се промени – продължавам проследяването' : 'Камерата следи погледа');
+      else if (glareChanged && !glareWarning) setStatus(st.distanceChanged ? 'busy' : 'on',
+        st.distanceChanged ? 'Позицията се промени – продължавам проследяването' : 'Камерата следи погледа');
+      else if (eyeChanged && !eyeWarning) setStatus(st.distanceChanged ? 'busy' : 'on',
         st.distanceChanged ? 'Позицията се промени – продължавам проследяването' : 'Камерата следи погледа');
       else if (distanceChanged) setStatus(st.distanceChanged ? 'busy' : 'on',
         st.distanceChanged ? 'Позицията се промени – продължавам проследяването' : 'Камерата следи погледа');
+    }
+    if (tracking.calibrating) {
+      $('calibProgress').textContent = st.glareBoth
+        ? 'Отражение закрива двете очи – премести лампата или промени ъгъла на екрана'
+        : glareWarning ? 'Отражение в едната леща – използвам по-ясното око'
+          : eyeWarning ? 'Камерата не вижда очите ясно – подобри светлината или избери друга камера'
+            : calibrationProgressText;
     }
     if (!calib.classList.contains('show') || $('calibMsg').classList.contains('hidden')) return;
     const W = video.videoWidth || 1280;
     setCheck('chkFace', st.face ? 'ok' : 'bad', st.face ? 'Лицето се вижда' : 'Не виждам лице – погледни към камерата');
     if (st.face) {
       const r = st.eyeWidth / W;
-      if (st.eyeWidth < 24 || st.eyeQuality < 0.3) {
+      if (st.glareBoth) {
+        setCheck('chkEyes', 'bad', 'Отражение закрива двете очи – промени ъгъла на лампата или екрана');
+      } else if (st.glareLeft > 0.04 || st.glareRight > 0.04) {
+        setCheck('chkEyes', 'mid', 'Има отражение в едната леща – проследяването ще разчита повече на другото око');
+      } else if (st.eyeWidth < 24 || st.eyeQuality < 0.3) {
         setCheck('chkEyes', 'bad', `Очите са неясни (${Math.round(st.eyeWidth)} px в камера ${st.cameraWidth}×${st.cameraHeight}) – избери HD камера или приближи се`);
       } else if (st.eyeWidth < 40 || st.eyeQuality < 0.55) {
         setCheck('chkEyes', 'mid', `Очите са малки в кадъра (${Math.round(st.eyeWidth)} px) – повече светлина или по-висока резолюция ще помогне`);
@@ -1369,7 +1400,9 @@
     }
     $('calibStart').disabled = !st.face; $('quickStart').disabled = !st.face;
     $('camAdvice').textContent = st.face
-      ? settings.glasses
+      ? st.glareBoth
+        ? 'Отражението закрива очите. Премести лампата извън отражението в лещите или леко промени ъгъла на екрана.'
+        : settings.glasses
         ? 'Сложи лицето си в овала и остани на стабилно разстояние. Ако екранът или лампа се отразява в очилата, промени леко ъгъла на светлината.'
         : 'Сложи лицето си в овала и остани на едно стабилно разстояние от камерата. Не е нужно да седиш плътно до екрана.'
       : 'Седни срещу камерата, с лице към светлината.';
@@ -1540,6 +1573,7 @@
 
   function closeCalib() {
     tracking.calibrating = false;
+    setCalibrationProgress('');
     calib.classList.remove('show');
     $('calibDot').className = '';
     placeVideo(false);
@@ -1622,7 +1656,7 @@
     placeVideo(false);
     closeHelp();
     const dot = $('calibDot');
-    const prog = $('calibProgress');
+    setCalibrationProgress('');
     const W = innerWidth, H = innerHeight;
     await sleep(700);
     engine.setDistanceReference();
@@ -1636,7 +1670,7 @@
       for (let i = 0; i < CALIB_POINTS.length; i++) {
         if (tracking.cancelCalib) return cancelSequence();
         const [px, py] = [CALIB_POINTS[i][0] / 100 * W, CALIB_POINTS[i][1] / 100 * H];
-        prog.textContent = `Гледай точката · ${i + 1} от ${CALIB_POINTS.length} · Esc за отказ`;
+        setCalibrationProgress(`Гледай точката · ${i + 1} от ${CALIB_POINTS.length} · Esc за отказ`);
         let got = 0;
         for (let attempt = 0; attempt < 3 && got < 10; attempt++) {
           await showDotAt(px, py);
@@ -1645,7 +1679,7 @@
           const feats = await engine.collect(1300);
           dot.classList.remove('collect');
           got += engine.addPoint(feats, px, py, 'p' + i);
-          if (got < 10) prog.textContent = 'Не виждам очите ти добре – погледни точката отново';
+          if (got < 10) setCalibrationProgress('Не виждам очите ти добре – погледни точката отново');
         }
       }
       engine.fit(true);
@@ -1663,7 +1697,7 @@
     for (let i = 0; i < TEST_POINTS.length; i++) {
       if (tracking.cancelCalib) return cancelSequence();
       const [px, py] = [TEST_POINTS[i][0] / 100 * W, TEST_POINTS[i][1] / 100 * H];
-      prog.textContent = `Проверка на точността · ${i + 1} от ${TEST_POINTS.length}`;
+      setCalibrationProgress(`Проверка на точността · ${i + 1} от ${TEST_POINTS.length}`);
       await showDotAt(px, py, 'test');
       dot.style.setProperty('--collect-ms', '1000ms');
       dot.classList.add('collect');
@@ -1676,7 +1710,7 @@
     engine.fit(true);
     engine.resetFilter();
     engine.resizeTargets(innerWidth, innerHeight);
-    dot.className = ''; prog.textContent = '';
+    dot.className = ''; setCalibrationProgress('');
     if (!errs.length) return showResult('Не виждам очите ти', 'Провери светлината и опитай пак.', false);
 
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };

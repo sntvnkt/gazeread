@@ -68,9 +68,11 @@ function ridge(X, ys, w, lambda) {  // връща тегла за всеки и�
 }
 
 const median = (arr) => { const s = [...arr].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
-const eyeReliability = (x, y2) => 1 / (1
-  + 8 * Math.max(0, Math.abs(x) - 0.55)
-  + 6 * Math.max(0, -0.2 - y2, y2 - 1.2));
+const eyeReliability = (x, y2, glare = 0) => {
+  const geometry = 1 / (1 + 8 * Math.max(0, Math.abs(x) - 0.55)
+    + 6 * Math.max(0, -0.2 - y2, y2 - 1.2));
+  return geometry * Math.max(0.08, 1 - Math.max(0, glare - 0.015) * 12);
+};
 
 function upgradeLegacyFeatures(f) {
   if (!Array.isArray(f) || f.length !== 24) return f;
@@ -97,7 +99,7 @@ class GazeEngine {
     this.listeners = { gaze: [], status: [] };
     this.fx = new OneEuro(); this.fy = new OneEuro();
     this.openBase = null;
-    this.status = { face: false, eyeWidth: 0, eyeQuality: 0, cameraWidth: 0, cameraHeight: 0, faceScale: 0, distanceRatio: null, distanceChanged: false, brightness: null, blink: false, fps: 0 };
+    this.status = { face: false, eyeWidth: 0, eyeQuality: 0, cameraWidth: 0, cameraHeight: 0, faceScale: 0, glareLeft: 0, glareRight: 0, glareBoth: false, distanceRatio: null, distanceChanged: false, brightness: null, blink: false, fps: 0 };
     this._referenceEyeWidth = null;
     this._referenceFaceHeight = null;
     this._screenWidth = innerWidth;
@@ -105,6 +107,8 @@ class GazeEngine {
     this._distanceSamples = [];
     this._frames = 0; this._fpsT = performance.now();
     this._canvas = document.createElement('canvas'); this._canvas.width = 32; this._canvas.height = 24;
+    this._eyeCanvas = document.createElement('canvas'); this._eyeCanvas.width = 640; this._eyeCanvas.height = 360;
+    this._eyeGlareAt = -Infinity; this._lastEyeGlare = [0, 0];
   }
 
   on(evt, cb) { this.listeners[evt].push(cb); }
@@ -205,6 +209,9 @@ class GazeEngine {
     this.status.face = !!lm;
     if (!lm) {
       this.status.blink = false;
+      this.status.eyeQuality = 0;
+      this.status.glareLeft = 0; this.status.glareRight = 0; this.status.glareBoth = false;
+      this._eyeGlareAt = -Infinity; this._lastEyeGlare = [0, 0];
       this._raw = [];
       this.fx.reset(); this.fy.reset();
       this.emit('status', this.status);
@@ -214,7 +221,10 @@ class GazeEngine {
     this.status.cameraWidth = W; this.status.cameraHeight = H;
     const P = (i) => ({ x: lm[i].x * W, y: lm[i].y * H });
     const mat = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0] && res.facialTransformationMatrixes[0].data;
-    const f = this._features(P, mat, W, H);
+    const glare = this._measureEyeGlare(lm, W, H, now);
+    this.status.glareLeft = glare[0]; this.status.glareRight = glare[1];
+    this.status.glareBoth = glare[0] > 0.04 && glare[1] > 0.04;
+    const f = this._features(P, mat, W, H, glare);
     this.status.eyeWidth = f.eyeW;
     this.status.eyeQuality = f.eyeQuality;
     this.status.faceScale = f.faceScale;
@@ -234,6 +244,7 @@ class GazeEngine {
     this.status.blink = f.open < this.openBase * 0.72;
     if (!this.status.blink) this.openBase += (f.open - this.openBase) * 0.02;
     this.emit('status', this.status);
+    if (this.status.glareBoth || f.eyeQuality < 0.3) { this._raw = []; return; }
     // при мигане и ~180 ms след него очите още не са на място → пропускаме кадрите
     if (this.status.blink) { this._blinkUntil = now + 180; this._raw = []; return; }
     if (now < (this._blinkUntil || 0)) return;
@@ -257,7 +268,37 @@ class GazeEngine {
     }
   }
 
-  _features(P, mat, W, H) {
+  _measureEyeGlare(lm, W, H, now) {
+    if (now - this._eyeGlareAt < 150) return this._lastEyeGlare;
+    this._eyeGlareAt = now;
+    const canvas = this._eyeCanvas, ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(this.video, 0, 0, canvas.width, canvas.height);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const sx = canvas.width / W, sy = canvas.height / H;
+    const ratio = (eye) => {
+      const a = lm[eye.a], b = lm[eye.b], up = lm[eye.up], low = lm[eye.low];
+      const left = Math.max(0, Math.floor((Math.min(a.x, b.x) * W - Math.abs(a.x - b.x) * W * 0.08) * sx));
+      const right = Math.min(canvas.width, Math.ceil((Math.max(a.x, b.x) * W + Math.abs(a.x - b.x) * W * 0.08) * sx));
+      const padY = Math.abs(a.x - b.x) * W * 0.22;
+      const top = Math.max(0, Math.floor((Math.min(up.y, low.y) * H - padY) * sy));
+      const bottom = Math.min(canvas.height, Math.ceil((Math.max(up.y, low.y) * H + padY) * sy));
+      let bright = 0, count = 0;
+      for (let y = top; y < bottom; y++) {
+        for (let x = left; x < right; x++) {
+          const i = (y * canvas.width + x) * 4;
+          const min = Math.min(pixels[i], pixels[i + 1], pixels[i + 2]);
+          const max = Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
+          if (min > 245 && max - min < 28) bright++;
+          count++;
+        }
+      }
+      return count ? bright / count : 0;
+    };
+    this._lastEyeGlare = [ratio(L_EYE), ratio(R_EYE)];
+    return this._lastEyeGlare;
+  }
+
+  _features(P, mat, W, H, glare = [0, 0]) {
     const eye = (e) => {
       const A = P(e.a), B = P(e.b), U = P(e.up), D = P(e.low), I = P(e.iris);
       const ox = (A.x + B.x) / 2, oy = (A.y + B.y) / 2;
@@ -273,7 +314,7 @@ class GazeEngine {
       };
     };
     const l = eye(L_EYE), r = eye(R_EYE);
-    const wl = eyeReliability(l.x, l.y2), wr = eyeReliability(r.x, r.y2), total = wl + wr;
+    const wl = eyeReliability(l.x, l.y2, glare[0]), wr = eyeReliability(r.x, r.y2, glare[1]), total = wl + wr;
     const ex = (l.x * wl + r.x * wr) / total;
     const ey = (l.y * wl + r.y * wr) / total;
     const ey2 = (l.y2 * wl + r.y2 * wr) / total;
