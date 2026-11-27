@@ -89,6 +89,66 @@ function upgradeLegacyFeatures(f) {
   return next;
 }
 
+// ---------- мимики ----------
+/*
+ * MediaPipe дава оценки 0…1 за мимиките („blendshapes“). Усмивката повдига долния клепач,
+ * намръщването сваля горния – окото променя формата си и изчислената посока на погледа се мести
+ * нагоре/надолу, без човекът да е преместил погледа си. Затова:
+ *   • сравняваме мимиката с обичайното (неутрално) лице на човека, а не с фиксиран праг;
+ *   • при мимика плавно минаваме към втори модел, който не ползва клепачите (само ирисът спрямо
+ *     ъглите на окото + главата) – така проследяването продължава и докато човекът се усмихва;
+ *   • само при много силна мимика (смях с почти затворени очи) точката за кратко остава на място;
+ *   • кадрите с мимика не се ползват за калибриране и учене;
+ *   • присвито от усмивка око не се брои за мигане.
+ */
+const EXPR_WEIGHTS = { eyeSquint: 1, cheekSquint: 1, mouthSmile: 0.7, browDown: 1, browInnerUp: 0.8, eyeWide: 0.8 };
+// признаци, които зависят от клепачите (ирисът между горния и долния клепач – индекси във вектора)
+const LID_FEATURES = new Set([4, 5, 9]);
+/** Колко да се разчита на модела без клепачите според силата на мимиката (0…1). */
+const lidFreeWeight = (dev) => Math.min(1, Math.max(0, (dev - 0.12) / 0.2));
+class ExpressionGate {
+  constructor(opts = {}) {
+    // точката се задържа само при много силна мимика (смях с почти затворени очи – ирисът не се вижда);
+    // при по-слабите проследяването продължава с модела без клепачите
+    this.on = opts.on ?? 0.6;            // над това отклонение – задържаме точката
+    this.off = opts.off ?? 0.45;         // под това – мимиката е отминала (хистерезис)
+    this.maxHold = opts.maxHold ?? 1500; // по-дълга мимика се приема за нормална
+    this.settle = opts.settle ?? 200;    // кратко изчакване, докато клепачите се върнат
+    this.reset();
+  }
+  reset() { this.base = null; this.hold = false; this.since = 0; this.until = 0; }
+
+  /** scores: { categoryName: score }. Връща { hold, dev, squint, blink }. */
+  update(scores, now) {
+    const pair = (k) => ((scores[k + 'Left'] || 0) + (scores[k + 'Right'] || 0)) / 2;
+    const v = {
+      eyeSquint: pair('eyeSquint'), cheekSquint: pair('cheekSquint'), mouthSmile: pair('mouthSmile'),
+      browDown: pair('browDown'), browInnerUp: scores.browInnerUp || 0, eyeWide: pair('eyeWide'),
+    };
+    if (!this.base) this.base = { ...v };
+    let dev = 0;
+    for (const k in v) dev = Math.max(dev, (v[k] - this.base[k]) * EXPR_WEIGHTS[k]);
+    const squint = Math.max(v.eyeSquint - this.base.eyeSquint, v.cheekSquint - this.base.cheekSquint,
+      (v.mouthSmile - this.base.mouthSmile) * 0.7);
+
+    if (!this.hold && dev > this.on) { this.hold = true; this.since = now; }
+    else if (this.hold && dev < this.off) { this.hold = false; this.until = now + this.settle; }
+    else if (this.hold && now - this.since > this.maxHold) {
+      this.hold = false; this.until = 0;
+      this.base = { ...v };              // продължителна мимика → новото нормално лице
+      dev = 0;
+    }
+    // обичайното лице се нагажда: към по-спокойно – бързо; към по-изразително – бавно и само при малка разлика
+    if (!this.hold) for (const k in v) {
+      const d = v[k] - this.base[k];
+      if (d < 0) this.base[k] += d * 0.05;
+      else if (d < 0.15) this.base[k] += d * 0.01;
+    }
+
+    return { hold: this.hold || now < this.until, dev, squint, blink: pair('eyeBlink') };
+  }
+}
+
 // ---------- двигателят ----------
 class GazeEngine {
   constructor() {
@@ -99,7 +159,8 @@ class GazeEngine {
     this.listeners = { gaze: [], status: [] };
     this.fx = new OneEuro(); this.fy = new OneEuro();
     this.openBase = null;
-    this.status = { face: false, eyeWidth: 0, eyeQuality: 0, cameraWidth: 0, cameraHeight: 0, faceScale: 0, glareLeft: 0, glareRight: 0, glareBoth: false, distanceRatio: null, distanceChanged: false, brightness: null, blink: false, fps: 0 };
+    this.expr = new ExpressionGate();
+    this.status = { face: false, eyeWidth: 0, eyeQuality: 0, cameraWidth: 0, cameraHeight: 0, faceScale: 0, glareLeft: 0, glareRight: 0, glareBoth: false, distanceRatio: null, distanceChanged: false, brightness: null, blink: false, expression: 0, expressionHold: false, fps: 0 };
     this._referenceEyeWidth = null;
     this._referenceFaceHeight = null;
     this._screenWidth = innerWidth;
@@ -155,7 +216,8 @@ class GazeEngine {
           runningMode: 'VIDEO', numFaces: 1,
           // по-ниски прагове: малко (далечно) лице все пак се намира и не се „губи“
           minFaceDetectionConfidence: 0.3, minFacePresenceConfidence: 0.3, minTrackingConfidence: 0.3,
-          outputFacialTransformationMatrixes: true, outputFaceBlendshapes: false,
+          // blendshapes = оценки на мимиките (усмивка, присвиване, намръщване, мигане)
+          outputFacialTransformationMatrixes: true, outputFaceBlendshapes: true,
         });
         try { this.landmarker = await FaceLandmarker.createFromOptions(fs, opts('GPU')); }
         catch (e) { this.landmarker = await FaceLandmarker.createFromOptions(fs, opts('CPU')); }
@@ -167,6 +229,7 @@ class GazeEngine {
     }
     this.running = true;
     this._lastVideoTime = -1;
+    this.expr.reset(); this.openBase = null;
     this._loop();
   }
 
@@ -239,28 +302,50 @@ class GazeEngine {
       this.status.distanceRatio = null;
       this.status.distanceChanged = false;
     }
-    // мигане: клепачите са много по-затворени от обичайното
+    // мимики (ако MediaPipe ги е дал)
+    const cats = res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories;
+    let g = null;
+    if (cats && cats.length) {
+      const scores = {};
+      for (const c of cats) scores[c.categoryName] = c.score;
+      g = this.expr.update(scores, now);
+    }
+    this.status.expression = g ? g.dev : 0;
+    this.status.expressionHold = !!(g && g.hold);
+    // мигане: клепачите са много по-затворени от обичайното – освен ако го обяснява усмивка/присвиване
     if (this.openBase === null) this.openBase = f.open;
-    this.status.blink = f.open < this.openBase * 0.72;
-    if (!this.status.blink) this.openBase += (f.open - this.openBase) * 0.02;
+    const closed = f.open < this.openBase * 0.72;
+    this.status.blink = g ? (g.blink > 0.6 || (closed && g.squint < 0.3)) : closed;
+    // „обичайната“ отвореност се учи само при спокойно лице (иначе след усмивка окото изглежда „ококорено“)
+    if (!this.status.blink && !(g && g.hold)) this.openBase += (f.open - this.openBase) * 0.02;
     this.emit('status', this.status);
     if (this.status.glareBoth || f.eyeQuality < 0.3) { this._raw = []; return; }
     // при мигане и ~180 ms след него очите още не са на място → пропускаме кадрите
     if (this.status.blink) { this._blinkUntil = now + 180; this._raw = []; return; }
     if (now < (this._blinkUntil || 0)) return;
-    this.recent.push({ f: f.vec, t: now });
-    while (this.recent.length && now - this.recent[0].t > 3000) this.recent.shift();
+    // много силна мимика (ирисът почти не се вижда): точката остава на мястото си
+    if (g && g.hold) { this._raw = []; return; }
+    // при по-слаба мимика плавно минаваме към модела без клепачите (изгладено, за да не трепти)
+    const target = g ? lidFreeWeight(g.dev) : 0;
+    this._lidW = (this._lidW || 0) + (target - (this._lidW || 0)) * 0.3;
+    this.status.lidFree = this._lidW;
+    // кадрите с изразена мимика не се ползват за калибриране и учене – клепачите им „лъжат“
+    if (this._lidW < 0.5) {
+      this.recent.push({ f: f.vec, t: now });
+      while (this.recent.length && now - this.recent[0].t > 3000) this.recent.shift();
+    }
     if (this.model) {
       // медиана от последните кадри маха единичните „скокове“;
-      // когато лицето е далеч (малки очи в кадъра), шумът е по-голям → гледаме повече кадри
+      // когато лицето е далеч (малки очи в кадъра), шумът е по-голям → гледаме повече кадри.
+      // One Euro: нисък праг = гладко, докато погледът стои; beta = бърза реакция при скок към друга дума
       const lowDetail = f.eyeW < 40 || f.eyeQuality < 0.55;
       const win = lowDetail ? 9 : 5;
-      const cutoff = lowDetail ? 0.6 : 1.0;
+      const cutoff = lowDetail ? 0.35 : 0.6;
       const beta = lowDetail ? 0.006 : 0.01;
       if (this.fx.minCutoff !== cutoff) { this.fx.minCutoff = cutoff; this.fy.minCutoff = cutoff; }
       if (this.fx.beta !== beta) { this.fx.beta = beta; this.fy.beta = beta; }
       this._raw = this._raw || [];
-      this._raw.push(this._predict(f.vec));
+      this._raw.push(this._predict(f.vec, this._lidW));
       while (this._raw.length > win) this._raw.shift();
       const x = median(this._raw.map((p) => p[0])), y = median(this._raw.map((p) => p[1]));
       const sx = this.fx.filter(x, now), sy = this.fy.filter(y, now);
@@ -395,6 +480,7 @@ class GazeEngine {
       if (this.model) {
         this.model.wx = this.model.wx.map((v) => v * sx);
         this.model.wy = this.model.wy.map((v) => v * sy);
+        if (this.model.lx) { this.model.lx = this.model.lx.map((v) => v * sx); this.model.ly = this.model.ly.map((v) => v * sy); }
       }
     }
     this._screenWidth = width; this._screenHeight = height;
@@ -483,15 +569,25 @@ class GazeEngine {
       }
     }
     const [wx, wy] = ridge(X, ys, w, lambda);
-    this.model = { mean, std, wx, wy, lambda };
+    // втори модел без клепачите – за усмивка/намръщване, когато клепачите се местят, а погледът не:
+    // само ирисът спрямо ъглите на окото + положението на главата
+    const noLid = X.map((row) => row.map((v, j) => (LID_FEATURES.has(j) ? 0 : v)));
+    const [lx, ly] = ridge(noLid, ys, w, lambda);
+    this.model = { mean, std, wx, wy, lx, ly, lambda };
     return this.model;
   }
 
-  _predict(f) {
-    const { mean, std, wx, wy } = this.model;
-    let x = 0, y = 0;
-    for (let j = 0; j < f.length; j++) { const v = (f[j] - mean[j]) / std[j]; x += v * wx[j]; y += v * wy[j]; }
-    return [x, y];
+  /** lidFree: 0 = обикновеният модел, 1 = моделът без клепачите (при мимика), между тях – плавно смесване. */
+  _predict(f, lidFree = 0) {
+    const { mean, std, wx, wy, lx, ly } = this.model;
+    let x = 0, y = 0, x2 = 0, y2 = 0;
+    for (let j = 0; j < f.length; j++) {
+      const v = (f[j] - mean[j]) / std[j];
+      x += v * wx[j]; y += v * wy[j];
+      if (lx) { x2 += v * lx[j]; y2 += v * ly[j]; }
+    }
+    if (!lx || lidFree <= 0) return [x, y];
+    return [x + (x2 - x) * lidFree, y + (y2 - y) * lidFree];
   }
 
   /** Предвиждане за набор признаци (за теста на точността). */
