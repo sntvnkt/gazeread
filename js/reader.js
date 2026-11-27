@@ -226,31 +226,25 @@
   // ---------------- текст от сайт ----------------
   const JUNK_IMG = /logo|icon|avatar|sprite|pixel|badge|emoji|\.svg(\?|$)|^data:/i;
 
-  // чисти markdown от r.jina.ai, но запазва заглавия, списъци, цитати и картинки
+  // чисти markdown от r.jina.ai, като оставя само четимото съдържание
   function cleanMarkdown(md) {
     const title = (/^Title:\s*(.+)$/m.exec(md) || [])[1];
     const start = md.indexOf('Markdown Content:');
     if (start >= 0) md = md.slice(start + 'Markdown Content:'.length);
-    const imgs = [];
     md = md.replace(/\r/g, '')
       .replace(/```[^\n]*\n?/g, '')
       // заглавия от вида „Текст\n=====“
       .replace(/^(.+)\n=+\s*$/gm, '# $1').replace(/^(.+)\n-{3,}\s*$/gm, '## $1')
       // редове, които са само връзки (менюта, навигация)
       .replace(/^\s*(?:[-*+]\s+)?(?:\[[^\]]*\]\([^)]*\)[\s|·•,/-]*)+$/gm, '')
-      // картинки → на отделен ред
-      .replace(/\[?!\[([^\]]*)\]\(([^)\s]+)[^)]*\)(?:\]\([^)]*\))?/g, (m, alt, src) => {
-        if (JUNK_IMG.test(src)) return '';
-        imgs.push(`![${alt.replace(/[[\]]/g, '')}](${src})`);
-        return `\n\n\u0000${imgs.length - 1}\u0000\n\n`;
-      })
+      .replace(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g, '')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')          // връзки → текст
       .replace(/<[^>]+>/g, '')
       .replace(/`/g, '')
       .replace(/^\s*\|.*\|\s*$/gm, '')                  // таблици
       .replace(/^\s*([-*_]\s*){3,}$/gm, '')             // хоризонтални линии
       .replace(/^[ \t]+(?=[-*+]\s|\d+[.)]\s)/gm, '')     // вложени списъци → обикновени
-      .replace(/\u0000(\d+)\u0000/g, (m, i) => imgs[+i])
       .replace(/\n{3,}/g, '\n\n')
       .trim();
     if (title && !/^#\s/.test(md)) md = '# ' + title.trim() + '\n\n' + md;
@@ -258,7 +252,7 @@
   }
 
   // HTML (от сайт или от копиран текст) → прост markdown със запазена структура
-  function htmlToMarkdown(root, base) {
+  function htmlToMarkdown(root, base, { includeImages = true } = {}) {
     const out = [];
     const SKIP = /^(SCRIPT|STYLE|NAV|HEADER|FOOTER|ASIDE|FORM|NOSCRIPT|BUTTON|SVG|IFRAME|SELECT|TEMPLATE)$/;
     const BLOCKS = 'h1,h2,h3,h4,h5,h6,p,li,ul,ol,blockquote,pre,figure,figcaption,img,table,div,section,article,dl,dd,dt';
@@ -266,6 +260,7 @@
     const abs = (s) => { try { return s ? new URL(s, base).href : ''; } catch (e) { return ''; } };
     const push = (s) => { if (s && s.replace(/[#\-\d.>\s]/g, '').length) out.push(s); };
     const pushImg = (img) => {
+      if (!includeImages) return;
       const src = abs(img.getAttribute('src') || img.getAttribute('data-src'));
       if (/^https:/i.test(src) && !JUNK_IMG.test(src) && !(+img.getAttribute('width') > 0 && +img.getAttribute('width') < 60)) out.push(`![${(img.alt || '').replace(/[[\]]/g, '')}](${src})`);
     };
@@ -295,10 +290,44 @@
     return out.join('\n\n');
   }
 
+  const PAGE_CHROME = /(?:^|[-_\s])(?:navigation|nav|menu|sidebar|breadcrumb|related|recommend(?:ed|ations)?|advert(?:isement)?|ads?|social|share|comments?|cookie|consent|newsletter|pagination|pager|toolbar|search|widget|popup|modal)(?:$|[-_\s])/i;
+  const MAIN_CONTENT = 'article, main, [role="main"], [itemprop="articleBody"], [class*="article-body"], [class*="article-content"], [class*="post-content"], [class*="entry-content"], [class*="story-body"]';
+
+  function removePageChrome(root) {
+    root.querySelectorAll('script,style,nav,footer,aside,form,noscript,button,svg,iframe,select,template,[role="navigation"],[role="complementary"],[aria-hidden="true"]')
+      .forEach((el) => el.remove());
+    root.querySelectorAll('[id],[class],[role],[aria-label]').forEach((el) => {
+      const label = [el.id, el.className, el.getAttribute('role'), el.getAttribute('aria-label')]
+        .filter((v) => typeof v === 'string').join(' ');
+      if (PAGE_CHROME.test(label)) el.remove();
+    });
+  }
+
+  function contentScore(root) {
+    const text = root.textContent.replace(/\s+/g, ' ').trim();
+    if (text.length < 80) return 0;
+    const linkText = [...root.querySelectorAll('a')].reduce((n, a) => n + a.textContent.length, 0);
+    const paragraphs = root.querySelectorAll('p').length;
+    const semanticBonus = root.matches('article,[itemprop="articleBody"]') ? 500 : root.matches('main,[role="main"]') ? 250 : 0;
+    return text.length * (1 - 0.75 * Math.min(1, linkText / text.length)) + paragraphs * 100 + semanticBonus;
+  }
+
   function htmlToText(html, base) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    const root = doc.querySelector('article') || doc.querySelector('main') || doc.body;
-    return htmlToMarkdown(root, base);
+    const candidates = [...doc.querySelectorAll(MAIN_CONTENT)]
+      .filter((el) => !PAGE_CHROME.test(`${el.id} ${el.className}`));
+    let root = doc.body.cloneNode(true);
+    removePageChrome(root);
+    let bestScore = contentScore(root);
+    for (const candidate of candidates) {
+      const cleaned = candidate.cloneNode(true);
+      removePageChrome(cleaned);
+      const score = contentScore(cleaned);
+      if (score > bestScore) { root = cleaned; bestScore = score; }
+    }
+    const title = root.querySelector('h1')?.textContent.replace(/\s+/g, ' ').trim();
+    const text = htmlToMarkdown(root, base, { includeImages: false });
+    return title && !text.includes(title) ? `# ${title}\n\n${text}` : text;
   }
 
   // вид „статия“ – по-малък шрифт и подредба като на нормален сайт
@@ -487,7 +516,7 @@
     const z = zoomInfo && zoomInfo.el === el && !zoomInfo.done ? zoomInfo : null;
     if (z) z.done = true;
     Adapt.learn(el.dataset.word, helped);
-    if (z && settings.autoDwell) {
+    if (z && tracking.mode !== 'mouse' && settings.autoDwell) {
       const nd = Adapt.tuneDwell(settings.dwell, helped, performance.now() - z.t);
       if (nd !== settings.dwell) { settings.dwell = nd; $('dwell').value = nd; applySettings(); saveSettings(); }
     }
@@ -732,9 +761,12 @@
     if (watchingEl !== top) { watchingEl && watchingEl.classList.remove('watching'); watchingEl = top; }
 
     // личният модел решава колко дълго да чака за ТАЗИ дума
-    if (top && top !== helpEl && topV >= Adapt.dwellFor(top.dataset.word, settings.dwell)) {
+    const dwellThreshold = !top ? Infinity : tracking.mode === 'mouse'
+      ? settings.dwell
+      : Adapt.dwellFor(top.dataset.word, settings.dwell);
+    if (top && top !== helpEl && topV >= dwellThreshold) {
       const last = cooldown.get(top) || 0;
-      if (now - last > 5000) {
+      if (!cooldown.has(top) || now - last > 5000) {
         cooldown.set(top, now);
         top.classList.remove('watching');
         scores.clear();
@@ -750,14 +782,38 @@
   }
 
   // --- мишка ---
-  function onMouse(e) { onGazePoint(e.clientX, e.clientY, 1); }
+  let mouseHoverTarget = null;
+  let mouseHoverSince = 0;
+  function onMouse(e) {
+    const word = e.target instanceof Element ? e.target.closest('.w') : null;
+    const target = word && area.contains(word) ? word : null;
+    if (target !== mouseHoverTarget) {
+      mouseHoverTarget = target;
+      mouseHoverSince = target ? performance.now() : 0;
+    }
+    onGazePoint(e.clientX, e.clientY, 1);
+  }
   let mouseTimer = null;
   function startMouseMode() {
     stopTracking(true);
     tracking.active = true; tracking.mode = 'mouse';
     addEventListener('mousemove', onMouse);
     // таймер, за да се натрупва време и когато мишката стои неподвижно
-    mouseTimer = setInterval(() => { if (lastPoint) onGazePoint(lastPoint.x, lastPoint.y, 1); }, 60);
+    mouseTimer = setInterval(() => {
+      const now = performance.now();
+      if (mouseHoverTarget && !area.contains(mouseHoverTarget)) {
+        mouseHoverTarget = null;
+        mouseHoverSince = 0;
+      }
+      if (lastPoint) onGazePoint(lastPoint.x, lastPoint.y, 1);
+      if (mouseHoverTarget && mouseHoverTarget !== helpEl && now - mouseHoverSince >= settings.dwell * 1000) {
+        const last = cooldown.get(mouseHoverTarget) || 0;
+        if (!cooldown.has(mouseHoverTarget) || now - last > 5000) {
+          cooldown.set(mouseHoverTarget, now);
+          openHelp(mouseHoverTarget, 'gaze');
+        }
+      }
+    }, 60);
     setStatus('on', 'Режим с мишка – задръж курсора върху дума');
     $('eyeBtn').textContent = 'Изключи';
     applySettings();
@@ -1079,6 +1135,8 @@
     }
     removeEventListener('mousemove', onMouse);
     clearInterval(mouseTimer);
+    mouseHoverTarget = null;
+    mouseHoverSince = 0;
     tracking.cloudCalibrated = false;
     cloudHadFace = false;
     tracking.distanceChanged = false;
