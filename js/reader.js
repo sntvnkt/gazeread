@@ -220,7 +220,6 @@
     $('tab-text').hidden = name !== 'text';
     $('tab-url').hidden = name !== 'url';
     $('tab-photo').hidden = name !== 'photo';
-    if (name !== 'photo') closePhotoCamera();
   }
   inputTabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
@@ -500,7 +499,6 @@
   // ---------------- текст от снимка (OCR с Tesseract.js – изцяло в браузъра) ----------------
   const OCR_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
   let ocrScript = null, ocrBusy = false;
-  let photoStream = null, photoOwnStream = false;
 
   function loadTesseract() {
     if (window.Tesseract) return Promise.resolve(window.Tesseract);
@@ -653,7 +651,7 @@
     const err = $('photoErr'); err.textContent = '';
     $('photoImg').src = canvas.toDataURL('image/jpeg', 0.85);
     $('photoPreview').hidden = false;
-    $('photoCamBtn').disabled = true; $('photoFileBtn').disabled = true;
+    $('photoFileBtn').disabled = true;
     photoProgress(0, 'Зареждам разпознаването…');
     try {
       let { data } = await (await getOcrWorker('bul')).recognize(canvas);
@@ -690,7 +688,7 @@
     } finally {
       ocrBusy = false;
       $('photoProgress').hidden = true;
-      $('photoCamBtn').disabled = false; $('photoFileBtn').disabled = false;
+      $('photoFileBtn').disabled = false;
     }
   }
 
@@ -700,7 +698,6 @@
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
     if (!file) return;
-    closePhotoCamera();
     try {
       const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
       await recognizePhoto(prepareImage(bmp, bmp.width, bmp.height));
@@ -708,55 +705,6 @@
     } catch (er) {
       $('photoErr').textContent = 'Не мога да отворя този файл като снимка. Опитай с JPG или PNG.';
     }
-  });
-
-  // снимка с камерата
-  async function openPhotoCamera() {
-    $('photoErr').textContent = '';
-    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      $('photoErr').textContent = 'Камерата работи само през https:// или localhost. Можеш да избереш готова снимка.';
-      return;
-    }
-    const pv = $('photoVideo');
-    try {
-      // ако камерата вече следи погледа, ползваме същия поток (иначе Windows казва „камерата е заета“)
-      if (tracking.mode === 'camera' && video.srcObject) { photoStream = video.srcObject; photoOwnStream = false; }
-      else {
-        const base = { width: { ideal: 1920 }, height: { ideal: 1080 } };
-        try {
-          photoStream = await navigator.mediaDevices.getUserMedia({ video: { ...base, facingMode: { ideal: 'environment' } }, audio: false });
-        } catch (e1) {
-          if (e1.name === 'NotAllowedError' || e1.name === 'SecurityError') throw e1;
-          photoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        }
-        photoOwnStream = true;
-      }
-      pv.srcObject = photoStream; pv.muted = true;
-      await pv.play().catch(() => {});
-      $('photoCam').hidden = false; $('photoPreview').hidden = true;
-    } catch (e) {
-      console.error(e);
-      closePhotoCamera();
-      $('photoErr').textContent = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')
-        ? 'Няма разрешение за камерата. Разреши я от иконата до адреса или избери готова снимка.'
-        : 'Не успях да включа камерата. Затвори други програми, които я ползват, или избери готова снимка.';
-    }
-  }
-  function closePhotoCamera() {
-    const pv = $('photoVideo');
-    if (photoStream && photoOwnStream) photoStream.getTracks().forEach((t) => t.stop());
-    photoStream = null; photoOwnStream = false;
-    if (pv) pv.srcObject = null;
-    if ($('photoCam')) $('photoCam').hidden = true;
-  }
-  $('photoCamBtn').addEventListener('click', openPhotoCamera);
-  $('photoCamClose').addEventListener('click', closePhotoCamera);
-  $('photoShot').addEventListener('click', () => {
-    const pv = $('photoVideo');
-    if (!pv.videoWidth) { $('photoErr').textContent = 'Камерата още не е готова – опитай след секунда.'; return; }
-    const canvas = prepareImage(pv, pv.videoWidth, pv.videoHeight);
-    closePhotoCamera();
-    recognizePhoto(canvas);
   });
 
   // ---------------- трудни думи ----------------
