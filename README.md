@@ -7,6 +7,7 @@ The project is designed to run in a browser with an ordinary webcam—no dedicat
 ## Features
 
 - **Webcam gaze tracking:** MediaPipe Face Landmarker detects facial and iris landmarks in the browser. A per-user ridge-regression model maps those features to screen coordinates.
+- **Optional cloud tracking:** GazeCloudAPI can calibrate and provide gaze coordinates online. It is loaded only when selected; the user must explicitly acknowledge the external camera-data processing before starting it.
 - **Calibration and accuracy check:** Full calibration collects gaze samples at 13 screen points. A saved calibration can be checked with six points on later visits.
 - **In-place reading support:** A word that holds the reader’s gaze is enlarged without opening an overlay. Press **Shift** if it was read successfully; click it for syllable breakdown and speech.
 - **Personal adaptation:** A small online logistic-regression model learns from Shift and help clicks to estimate which words may be difficult and adjust dwell timing. Clicks can also provide additional gaze calibration samples.
@@ -28,13 +29,14 @@ Open [http://localhost:8080](http://localhost:8080). Set `PORT` to use a differe
 PORT=3000 node server.js
 ```
 
-Camera access is available on `localhost` or a secure HTTPS origin. Allow camera access when prompted. Chrome or Edge is recommended. The camera-based features load MediaPipe and its model from external CDNs, so an internet connection is needed on first use. Speech voices are provided by the browser and operating system; available languages vary by device.
+Camera access is available on `localhost` or a secure HTTPS origin. Allow camera access when prompted. Chrome or Edge is recommended. The local camera features load MediaPipe and its model from external CDNs, so an internet connection is needed on first use. GazeCloud also requires an internet connection and the page origin must be registered with [GazeRecorder](https://api.gazerecorder.com/register/). Speech voices are provided by the browser and operating system; available languages vary by device.
 
 The reader can also be opened as static files, but account features require `node server.js`.
 
 ## Privacy and data
 
-- Camera frames are processed in the browser and are not uploaded by GazeRead.
+- In local mode, camera frames are processed in the browser and are not uploaded by GazeRead.
+- Cloud mode uses GazeRecorder's online GazeCloudAPI. Camera and gaze data are handled by that external provider; review its terms and privacy information before enabling it. The app requires an explicit in-reader acknowledgement before starting cloud tracking.
 - Without an account, settings, calibration samples, and reading profile data are kept in browser `localStorage`.
 - With an account, profile data is stored in `data/users.json` by the local Node server. Passwords are stored as salted scrypt hashes; session tokens are held in HTTP-only cookies.
 - When loading an article by URL, the page address is sent to the configured text-extraction services (Jina Reader, with AllOrigins as a fallback). To avoid sending a URL to those services, copy and paste the article text instead.

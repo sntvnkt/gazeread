@@ -27,7 +27,9 @@
   const settings = Object.assign({
     dwell: 1.5, size: 26, spacing: 2.2, font: '"Lexend", sans-serif', rate: 0.8, voice: '',
     ruler: false, autoSpeak: false, dotOpacity: 45, showVideo: false, mouseMode: false, learnClicks: true, autoDwell: true, article: false, stay: 3,
+    gazeProvider: 'local',
   }, store.get('settings', {}));
+  if (!['local', 'cloud'].includes(settings.gazeProvider)) settings.gazeProvider = 'local';
   const ARTICLE_SCALE = 0.73; // вид „статия“: 26 px → 19 px
   // старата стойност 15% беше прекалено бледа – вдигаме я веднъж
   if (!settings.v || settings.v < 2) { if (settings.dotOpacity < 45) settings.dotOpacity = 45; settings.v = 2; }
@@ -48,8 +50,12 @@
     rulerEl.classList.toggle('on', settings.ruler && !!lastPoint);
     $('dotVal').textContent = settings.dotOpacity ? settings.dotOpacity + '%' : 'скрита';
     dotEl.style.opacity = settings.dotOpacity / 100;
-    dotEl.classList.toggle('on', settings.dotOpacity > 0 && tracking.mode === 'camera' && !!lastPoint);
+    dotEl.classList.toggle('on', settings.dotOpacity > 0 && ['camera', 'cloud'].includes(tracking.mode) && !!lastPoint);
     $('camVideo').classList.toggle('show', settings.showVideo && tracking.mode === 'camera');
+    $('gazeProvider').value = settings.gazeProvider;
+    $('cloudPrivacy').hidden = settings.gazeProvider !== 'cloud';
+    $('cloudConsentLabel').hidden = settings.gazeProvider !== 'cloud';
+    $('cloudRegistration').hidden = settings.gazeProvider !== 'cloud';
     invalidateRects();
   }
 
@@ -69,6 +75,13 @@
   bindRange('dotOpacity', 'dotOpacity', (v) => parseInt(v, 10)); bindCheck('showVideo', 'showVideo'); bindCheck('learnClicks', 'learnClicks'); bindCheck('autoDwell', 'autoDwell');
   bindCheck('article', 'article');
   bindCheck('mouseMode', 'mouseMode', () => { if (settings.mouseMode) startMouseMode(); else stopTracking(); });
+  $('gazeProvider').addEventListener('change', () => {
+    settings.gazeProvider = $('gazeProvider').value;
+    if (tracking.active) stopTracking(true);
+    setStatus('off', 'Изключено');
+    saveSettings();
+    applySettings();
+  });
 
   // тема
   const savedTheme = store.get('theme', null);
@@ -664,7 +677,7 @@
   /** Намира думата най-близо до точката (погледът от камера е неточен). */
   function wordAt(x, y, radius) {
     const hit = document.elementFromPoint(x, y);
-    if (hit && (hit.closest('#wordHelp') || hit.closest('.side') || hit.closest('#calib'))) return null;
+    if (hit && (hit.closest('#wordHelp') || hit.closest('.side') || hit.closest('#calib') || hit.closest('.nav') || hit.closest('dialog'))) return null;
     if (hit && hit.classList && hit.classList.contains('w')) return hit;
     let best = null, bestD = Infinity;
     for (const r of getRects()) {
@@ -685,7 +698,7 @@
     const dt = Math.min(0.2, lastFrame ? (now - lastFrame) / 1000 : 0);
     lastFrame = now;
 
-    if (settings.dotOpacity > 0 && tracking.mode === 'camera') {
+    if (settings.dotOpacity > 0 && ['camera', 'cloud'].includes(tracking.mode)) {
       dotEl.classList.add('on');
       // „мъртва зона“: малките трептения на погледа не местят точката
       if (!dotPos || Math.hypot(lastPoint.x - dotPos.x, lastPoint.y - dotPos.y) > 35) {
@@ -696,7 +709,7 @@
 
     const el = tracking.mode === 'camera'
       ? wordAtCamera(lastPoint.x, lastPoint.y, dt)
-      : wordAt(lastPoint.x, lastPoint.y, 4);
+      : wordAt(lastPoint.x, lastPoint.y, tracking.mode === 'cloud' ? 100 : 4);
 
     // линия за четене
     if (settings.ruler && el) {
@@ -754,6 +767,112 @@
   const video = $('camVideo');
   const calib = $('calib');
   let engineBound = false;
+  let gazeCloudScriptPromise = null;
+  let cloudHadFace = false;
+
+  function loadGazeCloudApi() {
+    if (window.GazeCloudAPI) return Promise.resolve(window.GazeCloudAPI);
+    if (gazeCloudScriptPromise) return gazeCloudScriptPromise;
+    gazeCloudScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://api.gazerecorder.com/GazeCloudAPI.js';
+      script.async = true;
+      script.onload = () => {
+        if (window.GazeCloudAPI) resolve(window.GazeCloudAPI);
+        else {
+          gazeCloudScriptPromise = null;
+          reject(new Error('GazeCloudAPI did not initialize.'));
+        }
+      };
+      script.onerror = () => {
+        gazeCloudScriptPromise = null;
+        reject(new Error('Could not load GazeCloudAPI.'));
+      };
+      document.head.appendChild(script);
+    });
+    return gazeCloudScriptPromise;
+  }
+
+  function bindGazeCloudCallbacks(api) {
+    api.UseClickRecalibration = true;
+    api.OnCalibrationComplete = () => {
+      if (!tracking.active || tracking.mode !== 'cloud') return;
+      tracking.cloudCalibrated = true;
+      $('accuracyText').textContent = 'Калибрирането е завършено от GazeCloud.';
+      setStatus('on', 'GazeCloud следи погледа');
+    };
+    api.OnResult = (data) => {
+      if (!tracking.active || tracking.mode !== 'cloud' || !data) return;
+      if (data.state !== 0) {
+        if (data.state === -1) {
+          cloudHadFace = false;
+          if (watchingEl) watchingEl.classList.remove('watching');
+          watchingEl = null;
+          lastPoint = null;
+          lineState.line = null;
+          lastFrame = 0;
+          scores.clear();
+          setStatus('busy', 'GazeCloud не вижда лице');
+        } else if (data.state === 1) {
+          tracking.cloudCalibrated = false;
+          setStatus('busy', 'Калибриране в GazeCloud…');
+        }
+        return;
+      }
+      if (!tracking.cloudCalibrated) return;
+      if (!cloudHadFace) setStatus('on', 'GazeCloud следи погледа');
+      cloudHadFace = true;
+      const x = Number(data.docX) - scrollX;
+      const y = Number(data.docY) - scrollY;
+      if (Number.isFinite(x) && Number.isFinite(y)) onGazePoint(x, y, 0.6);
+    };
+    api.OnCamDenied = () => {
+      if (tracking.mode !== 'cloud') return;
+      stopTracking(true);
+      setStatus('off', 'Няма разрешение за камерата');
+      toast('Разреши достъпа до камерата за GazeRecorder и опитай отново.', 6000);
+    };
+    api.OnError = (msg) => {
+      if (tracking.mode !== 'cloud') return;
+      stopTracking(true);
+      setStatus('off', 'Грешка в GazeCloud');
+      toast('GazeCloud: ' + String(msg || 'възникна грешка'), 6000);
+    };
+  }
+
+  async function startCloudTracking() {
+    if (!window.isSecureContext) { toast('Камерата работи само през https:// или localhost.', 5000); return; }
+    if (!$('cloudConsent').checked) {
+      toast('Потвърди, че разбираш какви данни използва онлайн режимът.', 5000);
+      $('cloudConsent').focus();
+      return;
+    }
+    stopTracking(true);
+    setStatus('busy', 'Зареждане на GazeCloud…');
+    $('eyeBtn').disabled = true;
+    try {
+      const api = await loadGazeCloudApi();
+      bindGazeCloudCallbacks(api);
+      tracking.active = true;
+      tracking.mode = 'cloud';
+      tracking.cloudCalibrated = false;
+      cloudHadFace = true;
+      calib.classList.remove('show');
+      $('eyeBtn').textContent = 'Изключи';
+      $('recalBtn').disabled = false;
+      $('testBtn').disabled = true;
+      setStatus('busy', 'GazeCloud се свързва и калибрира…');
+      applySettings();
+      api.StartEyeTracking();
+    } catch (e) {
+      console.error(e);
+      stopTracking(true);
+      setStatus('off', 'Неуспешно стартиране на GazeCloud');
+      toast('Не успях да стартирам GazeCloud. Провери интернет връзката и дали адресът на сайта е регистриран при GazeRecorder.', 7000);
+    } finally {
+      $('eyeBtn').disabled = false;
+    }
+  }
 
   function waitForEngine() {
     if (window.GazeEngine) return Promise.resolve(window.GazeEngine);
@@ -799,6 +918,7 @@
   }
 
   async function startCamera() {
+    if (settings.gazeProvider === 'cloud') return startCloudTracking();
     if (!window.isSecureContext) { toast('Камерата работи само през https:// или localhost.', 5000); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('Този браузър няма достъп до камера. Опитай с Chrome или Edge.', 5000); return; }
     stopTracking(true);
@@ -870,14 +990,25 @@
   }
 
   function stopTracking(silent) {
-    if (tracking.mode === 'camera' && window.GazeEngine) window.GazeEngine.stop();
+    const previousMode = tracking.mode;
+    tracking.active = false; tracking.mode = null; tracking.calibrating = false;
+    if (previousMode === 'camera' && window.GazeEngine) window.GazeEngine.stop();
+    if (previousMode === 'cloud' && window.GazeCloudAPI) {
+      try { window.GazeCloudAPI.StopEyeTracking(); }
+      catch (e) { console.error(e); toast('Не успях да спра GazeCloud коректно.', 5000); }
+      window.GazeCloudAPI.OnResult = null;
+      window.GazeCloudAPI.OnCalibrationComplete = null;
+      window.GazeCloudAPI.OnCamDenied = null;
+      window.GazeCloudAPI.OnError = null;
+    }
     removeEventListener('mousemove', onMouse);
     clearInterval(mouseTimer);
-    tracking.active = false; tracking.mode = null; tracking.calibrating = false;
+    tracking.cloudCalibrated = false;
+    cloudHadFace = false;
     tracking.distanceChanged = false;
     if (window.GazeEngine) window.GazeEngine.clearDistanceReference();
     calib.classList.remove('show');
-    lastPoint = null; scores.clear(); lineState.line = null;
+    lastPoint = null; dotPos = null; lastFrame = 0; scores.clear(); lineState.line = null;
     if (watchingEl) watchingEl.classList.remove('watching');
     dotEl.classList.remove('on'); rulerEl.classList.remove('on');
     $('recalBtn').disabled = true; $('testBtn').disabled = true;
@@ -890,7 +1021,16 @@
     if (tracking.active) { stopTracking(); return; }
     if (settings.mouseMode) startMouseMode(); else startCamera();
   });
-  $('recalBtn').addEventListener('click', () => { if (tracking.mode === 'camera') showFaceCheck(); });
+  $('recalBtn').addEventListener('click', () => {
+    if (tracking.mode === 'camera') showFaceCheck();
+    else if (tracking.mode === 'cloud' && window.GazeCloudAPI) {
+      tracking.cloudCalibrated = false;
+      cloudHadFace = true;
+      setStatus('busy', 'GazeCloud калибрира отново…');
+      try { window.GazeCloudAPI.RestartEyeTracking(); }
+      catch (e) { console.error(e); toast('Не успях да стартирам повторно калибриране в GazeCloud.', 6000); }
+    }
+  });
   $('testBtn').addEventListener('click', () => { if (tracking.mode === 'camera') runSequence(true); });
   $('calibCancel').addEventListener('click', () => { closeCalib(); if (!window.GazeEngine.model) stopTracking(); });
   $('calibStart').addEventListener('click', () => runSequence(false));

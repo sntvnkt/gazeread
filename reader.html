@@ -56,6 +56,16 @@
     <section class="panel">
       <h2>👁️ Проследяване на погледа</h2>
       <div class="status" id="trackStatus"><span class="dot"></span><span id="trackText">Изключено</span></div>
+      <div class="field" style="margin-top:12px">
+        <label for="gazeProvider">Метод за проследяване</label>
+        <select id="gazeProvider">
+          <option value="local">Локално на устройството (MediaPipe)</option>
+          <option value="cloud">Онлайн услуга (GazeCloud)</option>
+        </select>
+      </div>
+      <p class="hint" id="cloudPrivacy" hidden>Онлайн режимът използва GazeRecorder GazeCloudAPI. Камерата и данните за погледа се обработват от външната услуга. <a href="https://gazerecorder.com/gazecloudapi/" target="_blank" rel="noopener">Информация за GazeCloudAPI</a>.</p>
+      <label class="toggle" id="cloudConsentLabel" hidden><input type="checkbox" id="cloudConsent"> Разбирам, че онлайн режимът предава данни от камерата и погледа към GazeRecorder.</label>
+      <p class="hint" id="cloudRegistration" hidden>Преди употреба регистрирай адреса на сайта при <a href="https://api.gazerecorder.com/register/" target="_blank" rel="noopener">GazeRecorder</a>.</p>
       <div class="row" style="margin-top:12px">
         <button class="btn" id="eyeBtn">Включи проследяване</button>
         <button class="btn ghost small" id="recalBtn" disabled>Калибрирай отново</button>
