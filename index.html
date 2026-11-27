@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="bg" data-palette="peach">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GazeRead – четене с поглед</title>
+<meta name="description" content="GazeRead помага на хора с дислексия: следи погледа, разпознава трудните думи, увеличава ги, разделя ги на срички и ги озвучава.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/palettes.css">
+<script>
+  // по подразбиране „Праскова“; за сравнение: ?palette=ocean | mint | lavender | night | current (старият вид)
+  (function () {
+    const p = new URLSearchParams(location.search).get('palette');
+    if (p === 'current') delete document.documentElement.dataset.palette;
+    else if (/^(ocean|mint|lavender|peach|night)$/.test(p || '')) document.documentElement.dataset.palette = p;
+  })();
+</script>
+</head>
+<body>
+
+<nav class="nav">
+  <a href="index.html" class="logo"><span class="logo-eye" aria-hidden="true"></span>GazeRead</a>
+  <div class="nav-links">
+    <a href="#how" class="hide-sm">Как работи</a>
+    <a href="#features" class="hide-sm">Функции</a>
+    <a href="#faq" class="hide-sm">Въпроси</a>
+    <a href="reader.html#account" class="btn small ghost" id="accLink">👤 Вход</a>
+    <a href="reader.html" class="btn small">Започни да четеш</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div>
+    <span class="eyebrow">👁️ Помощник при дислексия</span>
+    <h1>Чети спокойно.<br><span>Погледът ти</span> казва кога ти трябва помощ.</h1>
+    <p class="lead">GazeRead е помощник за хора с дислексия. Камерата следи къде гледаш. Когато се задържиш дълго на една дума, тя се увеличава, разделя се на срички и може да я чуеш.</p>
+    <div class="hero-actions">
+      <a href="reader.html" class="btn big">👁️ Отвори четеца</a>
+      <a href="#how" class="btn big ghost">Как се ползва?</a>
+    </div>
+    <div class="trust"><span>Безплатно</span><span>Без специални уреди</span><span>Видеото не излиза от компютъра</span></div>
+  </div>
+
+  <div class="demo-card" id="demo" aria-label="Пример как работи GazeRead">
+    <span class="gaze-dot-demo" id="demoDot"></span>
+    <span class="w-demo">Малкото</span> <span class="w-demo">момче</span> <span class="w-demo">чете</span>
+    <span class="w-demo">една</span> <span class="w-demo" id="demoHard">интересна</span> <span class="w-demo">книга</span>
+    <span class="w-demo">за</span> <span class="w-demo">приключения.</span>
+    <div class="demo-pop" id="demoPop" style="visibility:hidden">
+      <span><kbd>Shift</kbd> – прочетох я · <b>клик</b> – на срички + звук</span>
+    </div>
+  </div>
+</header>
+
+<section class="section band" id="how">
+  <h2>Как се ползва – 5 лесни стъпки</h2>
+  <p class="sub">Не ти трябва нищо освен компютър с камера и браузър (Chrome или Edge).</p>
+  <div class="steps">
+    <div class="step"><h3>Сложи текст</h3><p>Отвори четеца и постави текст в полето – или въведи адрес на сайт и GazeRead ще извади текста от него.</p></div>
+    <div class="step"><h3>Включи камерата</h3><p>Натисни „Включи проследяване“ и разреши достъп до камерата. Видеото не се изпраща никъде – обработва се само на твоя компютър.</p></div>
+    <div class="step"><h3>Калибрирай</h3><p>Първо GazeRead проверява дали лицето, разстоянието и светлината са наред. После се появяват 13 точки – просто гледай всяка, докато се свие. Накрая ще видиш колко точно е проследяването.</p></div>
+    <div class="step"><h3>Чети нормално</h3><p>Седни удобно и оставай на стабилно разстояние от камерата. Не е нужно да се приближаваш много до екрана.</p></div>
+    <div class="step"><h3>Получи помощ</h3><p>Ако се задържиш на дума (по подразбиране 1,5 секунди), тя се увеличава на мястото си. Прочете ли я – натисни <b>Shift</b>. Не успя – <b>кликни върху нея</b>: ще се раздели на срички и ще я чуеш.</p></div>
+  </div>
+</section>
+
+<section class="section" id="features">
+  <h2>Какво може GazeRead</h2>
+  <p class="sub">Всичко е направено така, че текстът да е по-лесен за четене.</p>
+  <div class="features">
+    <div class="feature"><div class="ico">👁️</div><h3>Проследяване на погледа</h3><p>Чрез уеб камерата GazeRead разбира коя дума гледаш – без специални устройства.</p></div>
+    <div class="feature"><div class="ico">⏱️</div><h3>Откриване на трудни думи</h3><p>Умният алгоритъм засича кога погледът „засяда“ на дума и я отбелязва като трудна.</p></div>
+    <div class="feature"><div class="ico">🔎</div><h3>Увеличаване</h3><p>Трудната дума се увеличава направо в текста – без прозорци, които закриват останалите думи.</p></div>
+    <div class="feature"><div class="ico">✂️</div><h3>Срички</h3><p>С клик думата се разделя на срички в различни цветове – на български и на английски.</p></div>
+    <div class="feature"><div class="ico">🔊</div><h3>Озвучаване</h3><p>Чуй цялата дума или целия текст – с регулируема скорост.</p></div>
+    <div class="feature"><div class="ico">🌐</div><h3>Текст от сайт</h3><p>Въведи адрес на статия и GazeRead ще я покаже в спокоен, четим вид.</p></div>
+    <div class="feature"><div class="ico">📏</div><h3>Линия за четене</h3><p>Затъмнява всичко освен реда, който четеш, за да не се губиш.</p></div>
+    <div class="feature"><div class="ico">🖱️</div><h3>Режим с мишка</h3><p>Нямаш камера? Задръж мишката върху дума – ефектът е същият.</p></div>
+  </div>
+</section>
+
+<section class="section band">
+  <h2>Съвети за по-точно проследяване</h2>
+  <div class="tips">
+    <ul>
+      <li>Светлината да е <b>пред теб</b>, а не зад гърба ти (без прозорец зад теб).</li>
+      <li>Дръж главата си сравнително неподвижна – като при нормално четене.</li>
+      <li>Ако имаш очила и има отблясъци, наклони леко екрана.</li>
+      <li>Ако точката на погледа „бяга“, натисни <b>„Калибрирай отново“</b>.</li>
+      <li>Увеличи шрифта – с по-големи думи проследяването е по-точно.</li>
+      <li><b>Кликай върху думите</b> – всеки клик показва на системата къде точно гледаш и тя се донастройва.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section faq" id="faq">
+  <h2>Често задавани въпроси</h2>
+  <details><summary>Записва ли се видеото от камерата?</summary><p>Не. Проследяването става изцяло в браузъра ти. Нищо от камерата не се изпраща към сървър.</p></details>
+  <details><summary>Защо гласът не говори на български?</summary><p>Озвучаването използва гласовете на твоя компютър. В Microsoft Edge има безплатен български глас („Kalina“). В Windows можеш да добавиш български глас от Настройки → Час и език → Говор.</p></details>
+  <details><summary>Колко точно е проследяването?</summary><p>GazeRead намира ирисите на очите ти с модел за разпознаване на лице (MediaPipe) и се учи от калибрирането. Уеб камерата пак е по-неточна от специален уред, затова системата първо разпознава реда, който четеш, и после думата в него. След калибрирането ще видиш колко е точно проследяването и, ако трябва, текстът ще се увеличи автоматично.</p></details>
+  <details><summary>Трябва ли ми акаунт?</summary><p>Не е задължително. Без акаунт калибрирането и наученото се пазят в браузъра ти. С акаунт се пазят и на сървъра – така на всеки компютър е достатъчна бърза проверка от 10 секунди вместо пълно калибриране.</p></details>
+  <details><summary>Как GazeRead свиква с мен?</summary><p>Всеки път, когато натиснеш Shift (прочетох думата) или кликнеш дума (трябва ми помощ), личният AI модел научава какви думи са трудни точно за теб – и при тях помага по-рано. Освен това погледът ти върху думата се използва като нова точка за калибриране, така че проследяването става по-точно, колкото повече четеш.</p></details>
+  <details><summary>Какво става с текста от сайт?</summary><p>Адресът се изпраща към услуга за извличане на текст (r.jina.ai), за да се махнат рекламите и менютата. Ако не искаш това, просто копирай текста и го постави.</p></details>
+</section>
+
+<section class="section">
+  <div class="cta">
+    <h2>Готов ли си?</h2>
+    <p class="sub">Опитай с примерния текст или постави свой.</p>
+    <a href="reader.html" class="btn big">👁️ Започни да четеш</a>
+  </div>
+</section>
+
+<footer>GazeRead · помощник за четене при дислексия</footer>
+
+<script>
+  // показва името, ако човекът вече е влязъл в акаунта си
+  fetch('/api/me', { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : null).then((me) => {
+    if (me && me.user) document.getElementById('accLink').textContent = '👤 ' + me.user.username;
+  }).catch(() => {});
+
+  // Малка анимация: „погледът“ минава по думите и засяда на трудната
+  (function () {
+    const demo = document.getElementById('demo');
+    const dot = document.getElementById('demoDot');
+    const words = [...demo.querySelectorAll('.w-demo')];
+    const hard = document.getElementById('demoHard');
+    const pop = document.getElementById('demoPop');
+    let i = 0;
+    function moveTo(el) {
+      const r = el.getBoundingClientRect(), d = demo.getBoundingClientRect();
+      dot.style.left = (r.left - d.left + r.width / 2 - 11) + 'px';
+      dot.style.top = (r.top - d.top + r.height / 2 - 11) + 'px';
+    }
+    function tick() {
+      const el = words[i];
+      moveTo(el);
+      if (el === hard) {
+        setTimeout(() => { hard.classList.add('hot'); pop.style.visibility = 'visible'; }, 900);
+        setTimeout(() => { hard.innerHTML = '<span class="s1">ин</span>·<span class="s2">те</span>·<span class="s1">рес</span>·<span class="s2">на</span>'; }, 2300);
+        setTimeout(() => { hard.classList.remove('hot'); hard.textContent = 'интересна'; pop.style.visibility = 'hidden'; i = (i + 1) % words.length; tick(); }, 4200);
+      } else {
+        i = (i + 1) % words.length;
+        setTimeout(tick, 650);
+      }
+    }
+    // ?shot=1 → застинал кадър за снимки на дизайна
+    if (new URLSearchParams(location.search).get('shot')) {
+      moveTo(hard); hard.classList.add('hot'); pop.style.visibility = 'visible';
+      hard.innerHTML = '<span class="s1">ин</span>·<span class="s2">те</span>·<span class="s1">рес</span>·<span class="s2">на</span>';
+    } else if (!matchMedia('(prefers-reduced-motion: reduce)').matches) setTimeout(tick, 600);
+  })();
+</script>
+</body>
+</html>

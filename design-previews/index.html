@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GazeRead – цветови варианти</title>
+<style>
+  :root { --bg: #f4f2ee; --surface: #fff; --text: #1f2430; --muted: #5d6474; --border: #e2ddd3; --accent: #2f6fdb; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #16191f; --surface: #20242c; --text: #ece7da; --muted: #a5adbb; --border: #333a45; --accent: #6ea0ff; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", Verdana, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 28px 16px 8px; text-align: center; }
+  h1 { margin: 0 0 6px; font-size: clamp(24px, 4vw, 34px); }
+  header p { margin: 0 auto; color: var(--muted); max-width: 640px; }
+  .tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 18px 16px; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  .tab { font: inherit; font-size: 15px; display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 999px; border: 2px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+  .tab.active { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .sw { display: inline-flex; }
+  .sw i { width: 14px; height: 14px; border-radius: 50%; margin-left: -4px; border: 2px solid var(--surface); }
+  .sw i:first-child { margin-left: 0; }
+  main { max-width: 1320px; margin: 0 auto; padding: 0 16px 50px; }
+  .info { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px 20px; margin-bottom: 16px; }
+  .info h2 { margin: 0 0 4px; font-size: 22px; }
+  .info p { margin: 0; color: var(--muted); font-size: 15px; max-width: 720px; }
+  .info a { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .view { display: flex; gap: 6px; }
+  .view button { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+  .view button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .shot { border-radius: 14px; overflow: hidden; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,.12); background: var(--surface); }
+  .shot img { display: block; width: 100%; height: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; }
+  .grid figure { margin: 0; cursor: pointer; }
+  .grid figcaption { padding: 8px 2px; font-weight: 600; }
+  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Цветови варианти на GazeRead</h1>
+  <p>Пет нови палитри с по-жив дизайн плюс сегашния вид за сравнение. Всички са с мек фон и силен контраст на текста – подходящо при дислексия.</p>
+</header>
+<nav class="tabs" id="tabs"></nav>
+<main>
+  <div class="info">
+    <div><h2 id="name"></h2><p id="desc"></p></div>
+    <div class="view">
+      <button id="vHero" class="on">Първи екран</button>
+      <button id="vFull">Цялата страница</button>
+      <button id="vAll">Всички едно до друго</button>
+    </div>
+    <a id="live" target="_blank" rel="noopener">Отвори на живо ↗</a>
+  </div>
+  <div id="stage"></div>
+</main>
+<script>
+  const P = [
+    { id: 'ocean', name: '🌊 Океан', c: ['#0f7c8c', '#f27a5e', '#f5b83d'], d: 'Спокойно синьо-зелено с корал и слънчево жълто. Свежо и доверително – добър избор по подразбиране.' },
+    { id: 'mint', name: '🌿 Мента', c: ['#2f8a5b', '#e9a23b', '#5b8def'], d: 'Меко зелено като природа, топло жълто за акценти. Най-успокояващото за очите.' },
+    { id: 'lavender', name: '💜 Лавандула', c: ['#6a4fc8', '#f08a6c', '#3fb3a8'], d: 'Лилаво с праскова и тюркоаз. По-игриво и модерно, харесва се на деца и тийнейджъри.' },
+    { id: 'peach', name: '🍑 Праскова', c: ['#d2603a', '#2e5c8a', '#e8b23a'], d: 'Топъл кремав фон, теракота и тъмносиньо. Уютно, като хартия на книга.' },
+    { id: 'night', name: '🌙 Нощ', c: ['#f5c451', '#7fb7ff', '#ff8f7a'], d: 'Тъмен режим с меко жълто. По-малко светлина вечер – някои хора с дислексия четат по-лесно на тъмен фон.' },
+    { id: 'current', name: '◻️ Сегашен', c: ['#2f6fdb', '#d9822b', '#fbf8f1'], d: 'Сегашният вид – за сравнение.' },
+  ];
+  let cur = P[0], view = 'hero';
+  const tabs = document.getElementById('tabs'), stage = document.getElementById('stage');
+  P.forEach((p) => {
+    const b = document.createElement('button');
+    b.className = 'tab'; b.dataset.id = p.id;
+    b.innerHTML = `<span class="sw">${p.c.map((c) => `<i style="background:${c}"></i>`).join('')}</span>${p.name}`;
+    b.onclick = () => { cur = p; if (view === 'all') view = 'hero'; render(); };
+    tabs.appendChild(b);
+  });
+  const setView = (v) => { view = v; render(); };
+  document.getElementById('vHero').onclick = () => setView('hero');
+  document.getElementById('vFull').onclick = () => setView('full');
+  document.getElementById('vAll').onclick = () => setView('all');
+  function render() {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', view !== 'all' && t.dataset.id === cur.id));
+    document.getElementById('vHero').classList.toggle('on', view === 'hero');
+    document.getElementById('vFull').classList.toggle('on', view === 'full');
+    document.getElementById('vAll').classList.toggle('on', view === 'all');
+    document.getElementById('name').textContent = view === 'all' ? 'Всички варианти' : cur.name;
+    document.getElementById('desc').textContent = view === 'all' ? 'Кликни върху вариант, за да го видиш в голям размер.' : cur.d;
+    const live = document.getElementById('live');
+    live.href = '../index.html' + (cur.id === 'current' ? '' : '?palette=' + cur.id);
+    live.style.visibility = view === 'all' ? 'hidden' : 'visible';
+    if (view === 'all') {
+      stage.innerHTML = '<div class="grid">' + P.map((p) => `<figure data-id="${p.id}"><div class="shot"><img src="${p.id}-hero.png" alt="${p.name}"></div><figcaption>${p.name}</figcaption></figure>`).join('') + '</div>';
+      stage.querySelectorAll('figure').forEach((f) => f.onclick = () => { cur = P.find((p) => p.id === f.dataset.id); view = 'hero'; render(); scrollTo(0, 0); });
+    } else {
+      stage.innerHTML = `<div class="shot"><img src="${cur.id}-${view}.png" alt="${cur.name}"></div>`;
+    }
+  }
+  render();
+</script>
+</body>
+</html>

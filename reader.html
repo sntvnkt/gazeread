@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="bg" data-palette="peach">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GazeRead – Четец</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/palettes.css">
+</head>
+<body>
+
+<nav class="nav">
+  <a href="index.html" class="logo"><span class="logo-eye" aria-hidden="true"></span>GazeRead</a>
+  <div class="nav-links">
+    <a href="index.html#how" class="hide-sm">Как се ползва</a>
+    <button class="btn small ghost" id="themeBtn" title="Светла / тъмна тема">🌓</button>
+    <button class="btn small" id="accountBtn">👤 Вход</button>
+  </div>
+</nav>
+
+<!-- акаунт -->
+<dialog id="accountDlg" class="acc-dlg">
+  <button class="dlg-close" id="accClose" aria-label="Затвори">×</button>
+  <div id="accIn">
+    <h2>Моят акаунт</h2>
+    <p class="hint">С акаунт калибрирането, настройките и наученото за четенето ти се пазят и работят на всеки компютър.</p>
+    <p class="error" id="accNoServer" hidden>Акаунтите работят само когато сайтът е пуснат със сървъра на GazeRead (<code>node server.js</code>). Сега всичко се пази само в този браузър.</p>
+    <form id="accForm">
+      <div class="tabs">
+        <button type="button" class="tab active" data-acc="login">Вход</button>
+        <button type="button" class="tab" data-acc="register">Нов акаунт</button>
+      </div>
+      <div class="field"><label for="accUser">Потребителско име</label><input id="accUser" autocomplete="username" required minlength="3" maxlength="30"></div>
+      <div class="field"><label for="accPass">Парола (поне 6 символа)</label><input id="accPass" type="password" autocomplete="current-password" required minlength="6"></div>
+      <p class="error" id="accErr"></p>
+      <button class="btn" id="accSubmit" type="submit">Влез</button>
+    </form>
+  </div>
+  <div id="accOut" hidden>
+    <h2>Здравей, <span id="accName"></span>! 👋</h2>
+    <p class="hint">Калибрирането и личният ти модел се запазват автоматично в акаунта.</p>
+    <div class="row">
+      <button class="btn" id="accLogout">Изход</button>
+      <button class="btn ghost small" id="accDelete">Изтрий акаунта</button>
+    </div>
+  </div>
+</dialog>
+
+<main class="reader-layout">
+  <!-- ===== странична лента ===== -->
+  <aside class="side">
+
+    <section class="panel">
+      <h2>👁️ Проследяване на погледа</h2>
+      <div class="status" id="trackStatus"><span class="dot"></span><span id="trackText">Изключено</span></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="eyeBtn">Включи проследяване</button>
+        <button class="btn ghost small" id="recalBtn" disabled>Калибрирай отново</button>
+        <button class="btn ghost small" id="testBtn" disabled>Тест на точността</button>
+      </div>
+      <p class="hint" id="accuracyText"></p>
+      <label class="toggle" style="margin-top:12px"><input type="checkbox" id="mouseMode"> Режим с мишка (без камера)</label>
+      <div class="field" style="margin-top:6px">
+        <label for="dotOpacity">Видимост на точката на погледа: <b id="dotVal">45%</b></label>
+        <input type="range" id="dotOpacity" min="0" max="100" step="5" value="45">
+      </div>
+      <label class="toggle"><input type="checkbox" id="showVideo"> Покажи видеото от камерата</label>
+      <label class="toggle"><input type="checkbox" id="learnClicks" checked> Учи се от кликовете ми</label>
+      <p class="hint">Всеки клик върху дума показва на системата къде точно гледаш – така с времето става по-точна.</p>
+    </section>
+
+    <section class="panel">
+      <h2>⚙️ Настройки</h2>
+      <div class="field">
+        <label for="dwell">Задържане преди помощ: <b id="dwellVal">1,5 с</b></label>
+        <input type="range" id="dwell" min="0.6" max="4" step="0.1" value="1.5">
+      </div>
+      <div class="field">
+        <label for="stay">Увеличената дума остава: <b id="stayVal">3 с + според думата</b></label>
+        <input type="range" id="stay" min="0" max="10" step="0.5" value="3">
+        <p class="hint">Дългите думи и думите на срички остават по-дълго. Докато още гледаш думата, тя не се връща. 0 = остава, докато натиснеш Shift.</p>
+      </div>
+      <div class="field">
+        <label for="size">Размер на текста: <b id="sizeVal">26 px</b></label>
+        <input type="range" id="size" min="18" max="44" step="1" value="26">
+      </div>
+      <div class="field">
+        <label for="spacing">Разстояние между редовете: <b id="spacingVal">2,2</b></label>
+        <input type="range" id="spacing" min="1.5" max="3.2" step="0.1" value="2.2">
+      </div>
+      <div class="field">
+        <label for="font">Шрифт</label>
+        <select id="font">
+          <option value='"Lexend", sans-serif'>Lexend (препоръчан)</option>
+          <option value='"Atkinson Hyperlegible", sans-serif'>Atkinson Hyperlegible</option>
+          <option value='Verdana, sans-serif'>Verdana</option>
+          <option value='"Comic Sans MS", "Comic Neue", sans-serif'>Comic Sans</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="rate">Скорост на гласа: <b id="rateVal">0,8×</b></label>
+        <input type="range" id="rate" min="0.4" max="1.4" step="0.1" value="0.8">
+      </div>
+      <div class="field">
+        <label for="voice">Глас</label>
+        <select id="voice"><option value="">Автоматично</option></select>
+        <p class="hint" id="voiceHint"></p>
+      </div>
+      <label class="toggle"><input type="checkbox" id="article"> 📰 Вид статия (по-малък шрифт, като на нормален сайт)</label>
+      <label class="toggle"><input type="checkbox" id="ruler"> Линия за четене</label>
+      <label class="toggle"><input type="checkbox" id="autoSpeak"> Автоматично озвучаване на трудна дума</label>
+      <label class="toggle"><input type="checkbox" id="autoDwell" checked> AI нагласява времето за задържане</label>
+    </section>
+
+    <section class="panel">
+      <h2>🧠 Моят профил</h2>
+      <p class="hint" id="profileWho" style="margin-top:0"></p>
+      <ul class="profile-list" id="profileStats"></ul>
+      <h3 class="mini">Какво научи AI за четенето ти</h3>
+      <ul class="profile-list" id="profileAi"></ul>
+      <div class="row" style="margin-top:10px">
+        <button class="btn ghost small" id="forgetCalib">Изтрий калибрирането</button>
+        <button class="btn ghost small" id="resetAi">Нулирай AI</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>⚠️ Трудни думи <span id="hardCount" class="hint"></span></h2>
+      <div class="hard-list" id="hardList"><span class="hint">Тук ще се появят думите, на които си се задържал.</span></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ghost small" id="practiceBtn">🔊 Упражни ги</button>
+        <button class="btn ghost small" id="clearHard">Изчисти</button>
+      </div>
+    </section>
+  </aside>
+
+  <!-- ===== основна част ===== -->
+  <div style="display:flex; flex-direction:column; gap:20px; min-width:0">
+    <section class="panel" id="inputPanel">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="text">✍️ Постави текст</button>
+        <button class="tab" data-tab="url">🌐 От сайт</button>
+      </div>
+      <div id="tab-text">
+        <textarea id="textIn" placeholder="Постави или напиши текст тук… Копиран текст от сайт запазва заглавията, списъците и картинките."></textarea>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="readBtn">📖 Покажи за четене</button>
+          <button class="btn ghost" id="sampleBtn">Примерен текст</button>
+        </div>
+      </div>
+      <div id="tab-url" hidden>
+        <input type="url" id="urlIn" placeholder="https://bg.wikipedia.org/wiki/…">
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="urlBtn">⬇️ Вземи текста</button>
+        </div>
+        <p class="hint">Адресът се изпраща към r.jina.ai, за да се извлече само текстът на статията (без реклами и менюта).</p>
+        <p class="error" id="urlErr"></p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="row" style="justify-content:space-between; margin-bottom:10px">
+        <h2 style="margin:0">📖 Текст за четене</h2>
+        <div class="row">
+          <button class="btn ghost small" id="readAllBtn">🔊 Прочети всичко</button>
+          <button class="btn ghost small" id="stopBtn">⏹ Спри</button>
+          <button class="btn ghost small" id="editBtn">✏️ Смени текста</button>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:0">Когато се задържиш на дума, тя се увеличава. Прочете ли я – натисни <b>Shift</b>. Не – <b>кликни върху нея</b> и ще я видиш на срички и ще я чуеш.</p>
+      <article id="readingArea"><div class="empty">Постави текст горе и натисни „Покажи за четене“.</div></article>
+    </section>
+  </div>
+</main>
+
+<!-- малка подсказка долу, докато има увеличена дума -->
+<div id="wordHint" aria-live="polite"></div>
+
+<div id="ruler"></div>
+<div id="gazeDot"></div>
+
+<!-- калибриране -->
+<div id="calib">
+  <!-- стъпка 1: проверка на лицето -->
+  <div class="msg" id="calibMsg">
+    <h2>Нагласи се пред камерата</h2>
+    <div class="cam-wrap"><div id="camSlot"></div><div class="face-guide"></div></div>
+    <ul class="checks">
+      <li id="chkFace"><span></span> Лицето се вижда</li>
+      <li id="chkDist"><span></span> Разстояние до екрана</li>
+      <li id="chkLight"><span></span> Осветление</li>
+    </ul>
+    <p class="hint" id="camAdvice">Зареждам модела за разпознаване на лицето…</p>
+    <p>После ще се появят <b>13 точки</b> една по една. <b>Просто гледай точката</b>, докато се свие – не е нужно да кликаш. Опитай да не мърдаш главата.</p>
+    <p class="hint" id="quickNote" hidden>✅ Имаш запазено калибриране. Достатъчна е <b>бърза проверка</b> с 6 точки (около 10 секунди).</p>
+    <div class="row" style="justify-content:center">
+      <button class="btn big" id="quickStart" hidden disabled>Бърза проверка</button>
+      <button class="btn big" id="calibStart" disabled>Пълно калибриране</button>
+      <button class="btn ghost" id="calibCancel">Отказ</button>
+    </div>
+  </div>
+  <!-- резултат -->
+  <div class="msg hidden" id="calibResult">
+    <h2 id="resTitle">Готово!</h2>
+    <p id="resText"></p>
+    <div class="row" style="justify-content:center">
+      <button class="btn big" id="resOk">Започни да четеш</button>
+      <button class="btn ghost" id="resRetry">Калибрирай отново</button>
+    </div>
+  </div>
+  <div id="calibDot"><div></div></div>
+  <div id="calibProgress"></div>
+</div>
+
+<video id="camVideo" playsinline muted></video>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="js/gaze.js"></script>
+<script src="js/syllables.js"></script>
+<script src="js/profile.js"></script>
+<script src="js/adapt.js"></script>
+<script src="js/reader.js"></script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FocusRead – помощ при четене</title>
+<style>
+   body {
+     font-family: Arial, sans-serif;
+     background: #f0f5ff;
+     color: #24324a;
+     max-width: 800px;
+     margin: 40px auto;
+     padding: 20px;
+     line-height: 1.8;
+   }
+   h1 {
+     color: #3157a4;
+     text-align: center;
+   }
+   .panel {
+     background: white;
+     padding: 24px;
+     border-radius: 16px;
+     box-shadow: 0 4px 15px #00000010;
+   }
+   #word {
+     font-size: 32px;
+     color: #3157a4;
+     font-weight: bold;
+     text-align: center;
+     margin: 20px;
+   }
+   button {
+     background: #3157a4;
+     color: white;
+     border: none;
+     border-radius: 8px;
+     padding: 12px 18px;
+     margin: 5px;
+     cursor: pointer;
+     font-size: 16px;
+   }
+   button:hover {
+     background: #203e7b;
+   }
+   #reading {
+     font-size: 22px;
+     line-height: 2;
+   }
+</style>
+</head>
+<body>
+<h1>FocusRead</h1>
+<div class="panel">
+<h2>Помощник за четене</h2>
+<p>Натисни дума от текста, за да я увеличиш.</p>
+<div id="word">Избери дума</div>
+<div id="reading">
+<button onclick="showWord('Малкото')">Малкото</button>
+<button onclick="showWord('момче')">момче</button>
+<button onclick="showWord('чете')">чете</button>
+<button onclick="showWord('интересна')">интересна</button>
+<button onclick="showWord('книга.')">книга.</button>
+</div>
+<hr>
+<button onclick="speakWord()">🔊 Прочети думата</button>
+<button onclick="showSyllables()">Раздели на срички</button>
+<button onclick="alert('Проследяването с камера ще добавим по-късно!')">
+     Включи камерата
+</button>
+<p id="syllables"></p>
+</div>
+<script>
+   let selectedWord = "";
+   function showWord(word) {
+     selectedWord = word;
+     document.getElementById("word").textContent = word;
+     document.getElementById("syllables").textContent = "";
+   }
+   function speakWord() {
+     if (!selectedWord) {
+       alert("Първо избери дума от текста.");
+       return;
+     }
+     const speech = new SpeechSynthesisUtterance(selectedWord);
+     speech.lang = "bg-BG";
+     speech.rate = 0.8;
+     speechSynthesis.speak(speech);
+   }
+   function showSyllables() {
+     if (!selectedWord) {
+       alert("Първо избери дума от текста.");
+       return;
+     }
+     const words = {
+       "Малкото": "Мал-ко-то",
+       "момче": "мом-че",
+       "чете": "че-те",
+       "интересна": "ин-те-рес-на",
+       "книга.": "кни-га"
+     };
+     document.getElementById("syllables").textContent =
+       words[selectedWord] || "За тази дума още няма зададени срички.";
+   }
+</script>
+</body>
+</html>
