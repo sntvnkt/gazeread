@@ -898,8 +898,8 @@
       if (st.distanceRatio != null) {
         if (st.distanceChanged) setCheck('chkDist', 'mid', 'Позицията се промени – остани в това разстояние');
         else setCheck('chkDist', 'ok', 'Разстоянието е стабилно');
-      } else if (r < 0.007) setCheck('chkDist', 'bad', 'Твърде далеч си – камерата едва вижда очите ти');
-      else if (r < 0.012) setCheck('chkDist', 'mid', 'Далеч си – работи, но малко по-неточно (повече светлина помага)');
+      } else if (r < 0.006) setCheck('chkDist', 'bad', 'Твърде далеч си – камерата едва вижда очите ти');
+      else if (r < 0.0105) setCheck('chkDist', 'mid', 'Далеч си – работи, но малко по-неточно (повече светлина помага)');
       else if (r > 0.18) setCheck('chkDist', 'bad', 'Лицето е твърде голямо – отдалечи се малко');
       else setCheck('chkDist', 'ok', 'Разстоянието е приемливо');
     } else setCheck('chkDist', '', 'Разстояние до екрана');

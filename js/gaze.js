@@ -196,7 +196,7 @@ class GazeEngine {
       // медиана за последните ~0.5 s: при далечно лице ширината на окото „трепти“ от кадър на кадър
       const recentW = median(this._distanceSamples.filter((s) => now - s.t <= 500).map((s) => s.eyeW));
       this.status.distanceRatio = recentW / this._referenceEyeWidth;
-      this.status.distanceChanged = this.status.distanceRatio < 0.72 || this.status.distanceRatio > 1.38;
+      this.status.distanceChanged = this.status.distanceRatio < 0.65 || this.status.distanceRatio > 1.38;
     } else {
       this.status.distanceRatio = null;
       this.status.distanceChanged = false;
