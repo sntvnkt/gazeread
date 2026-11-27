@@ -881,31 +881,157 @@
   const synth = window.speechSynthesis;
   let voices = [];
   let speechToken = { cancelled: false };
+  const beronAudioCache = new Map();
+  let beronUnavailable = false;
+  let beronPlaybackWarningShown = false;
+  let stopBeronPlayback = null;
+
+  function updateVoiceHint() {
+    if (settings.voice === 'beron') {
+      $('voiceHint').textContent = beronUnavailable
+        ? 'БЕРОН временно не е достъпен; използва се гласът на браузъра.'
+        : beronPlaybackWarningShown
+          ? 'БЕРОН записът не можа да се възпроизведе; използва се гласът на браузъра.'
+          : 'Българските думи се търсят в БЕРОН; при липса на запис се използва гласът на браузъра.';
+      return;
+    }
+    const hasBg = voices.some((v) => /^bg/i.test(v.lang));
+    $('voiceHint').textContent = !synth
+      ? 'Този браузър не поддържа озвучаване.'
+      : voices.length && !hasBg
+        ? 'Няма български глас. Отвори сайта в Microsoft Edge или добави български глас в Windows (Настройки → Час и език → Говор).'
+        : '';
+  }
+
   function loadVoices() {
-    if (!synth) { $('voiceHint').textContent = 'Този браузър не поддържа озвучаване.'; return; }
-    voices = synth.getVoices();
     const sel = $('voice');
     const keep = settings.voice;
     sel.innerHTML = '<option value="">Автоматично</option>';
+    const beronOption = document.createElement('option');
+    beronOption.value = 'beron';
+    beronOption.textContent = 'БЕРОН — официален български (онлайн)';
+    sel.appendChild(beronOption);
+    if (!synth) { sel.value = keep; updateVoiceHint(); return; }
+    voices = synth.getVoices();
     voices.filter((v) => /^(bg|en)/i.test(v.lang)).concat(voices.filter((v) => !/^(bg|en)/i.test(v.lang)))
       .forEach((v) => { const o = document.createElement('option'); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.appendChild(o); });
     sel.value = keep;
-    const hasBg = voices.some((v) => /^bg/i.test(v.lang));
-    $('voiceHint').textContent = voices.length && !hasBg
-      ? 'Няма български глас. Отвори сайта в Microsoft Edge или добави български глас в Windows (Настройки → Час и език → Говор).'
-      : '';
+    updateVoiceHint();
   }
-  if (synth) { loadVoices(); synth.addEventListener?.('voiceschanged', loadVoices); }
-  $('voice').addEventListener('change', (e) => { settings.voice = e.target.value; saveSettings(); });
+  loadVoices();
+  if (synth) synth.addEventListener?.('voiceschanged', loadVoices);
+  $('voice').addEventListener('change', (e) => {
+    settings.voice = e.target.value;
+    saveSettings();
+    updateVoiceHint();
+  });
 
   function pickVoice(text) {
-    if (settings.voice) { const v = voices.find((x) => x.name === settings.voice); if (v) return v; }
+    if (settings.voice && settings.voice !== 'beron') {
+      const v = voices.find((x) => x.name === settings.voice);
+      if (v) return v;
+    }
     const lang = isCyrillic(text) ? 'bg' : 'en';
     const list = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
     return list.find((v) => /natural|online|neural/i.test(v.name)) || list[0] || null;
   }
 
-  function speak(text, { rate = settings.rate, onBoundary } = {}) {
+  async function getBeronAudio(text) {
+    const word = cleanWord(text).normalize('NFC').toLocaleLowerCase('bg-BG');
+    if (!word || !isCyrillic(word) || beronUnavailable) return null;
+    if (beronAudioCache.has(word)) return beronAudioCache.get(word);
+
+    const lookup = (async () => {
+      const resolveFromSearch = async () => {
+        const searchResponse = await fetch(`https://beron.mon.bg/api/search?searchTerm=${encodeURIComponent(word)}`);
+        if (!searchResponse.ok) throw new Error(`BERON search returned HTTP ${searchResponse.status}`);
+        const suggestions = await searchResponse.json();
+        const suggestion = Array.isArray(suggestions)
+          ? suggestions.find((entry) => entry?.CID && entry.PHRASE?.normalize('NFC').toLocaleLowerCase('bg-BG') === word)
+          : null;
+        if (!suggestion) return null;
+
+        const lexemeResponse = await fetch(`https://beron.mon.bg/api/lexeme/${encodeURIComponent(suggestion.CID)}`);
+        if (!lexemeResponse.ok) throw new Error(`BERON lexeme returned HTTP ${lexemeResponse.status}`);
+        return lexemeResponse.json();
+      };
+
+      const bytes = new TextEncoder().encode(word);
+      const encodedWord = btoa(String.fromCharCode(...bytes)).replace(/\//g, '_').replace(/\+/g, '-');
+      const lookupResponse = await fetch(`https://beron.mon.bg/api/lexsbyB64/${encodedWord}`);
+      if (!lookupResponse.ok && lookupResponse.status < 500) {
+        throw new Error(`BERON lookup returned HTTP ${lookupResponse.status}`);
+      }
+      const lookupData = lookupResponse.ok ? await lookupResponse.json() : null;
+      const matches = lookupData?.obj?.array;
+      let lexeme = Array.isArray(matches)
+        ? matches.find((entry) => entry?.id && entry.basicPhrase?.normalize('NFC').toLocaleLowerCase('bg-BG') === word)
+        : null;
+      if (!lexeme) lexeme = await resolveFromSearch();
+      if (!lexeme || lexeme.hasAudio === false) return null;
+
+      const audioResponse = await fetch(`https://beron.mon.bg/api/lexeme/${encodeURIComponent(lexeme.id)}/audio`);
+      if (audioResponse.status === 404) return null;
+      if (!audioResponse.ok) throw new Error(`BERON audio returned HTTP ${audioResponse.status}`);
+      const audioData = await audioResponse.json();
+      return typeof audioData?.base64mp3 === 'string' && audioData.base64mp3
+        ? `data:audio/mpeg;base64,${audioData.base64mp3}`
+        : null;
+    })();
+
+    beronAudioCache.set(word, lookup);
+    try {
+      return await lookup;
+    } catch (error) {
+      beronAudioCache.delete(word);
+      beronUnavailable = true;
+      console.warn('BERON pronunciation lookup failed; using browser speech.', error);
+      updateVoiceHint();
+      return null;
+    }
+  }
+
+  function playBeronAudio(source, rate, token) {
+    return new Promise((resolve) => {
+      if (token.cancelled) { resolve(false); return; }
+      const audio = new Audio(source);
+      audio.playbackRate = rate;
+      audio.preservesPitch = true;
+      let settled = false;
+      const finish = (played) => {
+        if (settled) return;
+        settled = true;
+        audio.onended = audio.onerror = audio.onpause = null;
+        if (stopBeronPlayback === stop) stopBeronPlayback = null;
+        resolve(played);
+      };
+      const stop = () => {
+        audio.pause();
+        finish(false);
+      };
+      stopBeronPlayback = stop;
+      audio.onended = () => finish(true);
+      audio.onerror = () => finish(false);
+      audio.onpause = () => finish(false);
+      audio.play().catch(() => finish(false));
+    });
+  }
+
+  async function speak(text, { rate = settings.rate, onBoundary, token = speechToken } = {}) {
+    if (settings.voice === 'beron' && isCyrillic(text)) {
+      const source = await getBeronAudio(text);
+      if (token.cancelled) return;
+      if (source) {
+        const played = await playBeronAudio(source, rate, token);
+        if (played || token.cancelled) return;
+        if (!beronPlaybackWarningShown) {
+          beronPlaybackWarningShown = true;
+          beronUnavailable = true;
+          console.warn('BERON audio could not be played; using browser speech.');
+          updateVoiceHint();
+        }
+      }
+    }
     return new Promise((resolve) => {
       if (!synth) return resolve();
       const u = new SpeechSynthesisUtterance(text);
@@ -921,6 +1047,7 @@
     speechToken.cancelled = true;
     speechToken = { cancelled: false };
     synth && synth.cancel();
+    stopBeronPlayback && stopBeronPlayback();
     wordEls.forEach((w) => w.classList.remove('speaking'));
   }
   async function readSentences(from, to) {
@@ -935,6 +1062,20 @@
       let lit = null;
       const light = (el) => { if (lit) lit.classList.remove('speaking'); lit = el; el && el.classList.add('speaking'); };
       light(ws[0]);
+      if (settings.voice === 'beron') {
+        for (const word of ws) {
+          if (tok.cancelled) return;
+          light(word);
+          await speak(word.dataset.tok, { token: tok });
+          if (tok.cancelled) return;
+          const tokenText = word.dataset.tok;
+          const pause = /[.!?…]+["»”')\]]*$/.test(tokenText) ? 320
+            : /[,;:]+["»”')\]]*$/.test(tokenText) ? 180 : 60;
+          await sleep(pause);
+        }
+        light(null);
+        continue;
+      }
       await speak(text, {
         onBoundary: (e) => {
           if (e.name && e.name !== 'word') return;

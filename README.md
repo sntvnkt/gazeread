@@ -12,7 +12,7 @@ The project is designed to run in a browser with an ordinary webcam—no dedicat
 - **Glasses support (local mode):** Save separate gaze calibrations with and without glasses, then switch between them when eyewear changes.
 - **In-place reading support:** A word that holds the reader’s gaze is enlarged without opening an overlay. Press **Shift** if it was read successfully; click it for syllable breakdown and speech.
 - **Personal adaptation:** A small online logistic-regression model learns from Shift and help clicks to estimate which words may be difficult and adjust dwell timing. Clicks can also provide additional gaze calibration samples.
-- **Accessible reading controls:** Adjustable font, text size, line spacing, voice and speech rate; reading ruler; light/dark theme; optional mouse-based interaction; hard-word list and practice.
+- **Accessible reading controls:** Adjustable font, text size, line spacing, voice and speech rate; optional official BERON Bulgarian word recordings; reading ruler; light/dark theme; optional mouse-based interaction; hard-word list and practice.
 - **Flexible input:** Paste or type text, request article text from a URL, or upload a phone photo for in-browser OCR.
 - **Optional accounts:** Save settings, calibration, and personal reading data to an account and use them on another computer. Guest data stays in the browser.
 
@@ -30,7 +30,7 @@ Open [http://localhost:8080](http://localhost:8080). Set `PORT` to use a differe
 PORT=3000 node server.js
 ```
 
-Camera access is available on `localhost` or a secure HTTPS origin. Allow camera access when prompted. Chrome or Edge is recommended. The local camera features load MediaPipe and its model from external CDNs, so an internet connection is needed on first use. GazeCloud also requires an internet connection and the page origin must be registered with [GazeRecorder](https://api.gazerecorder.com/register/). Speech voices are provided by the browser and operating system; available languages vary by device.
+Camera access is available on `localhost` or a secure HTTPS origin. Allow camera access when prompted. Chrome or Edge is recommended. The local camera features load MediaPipe and its model from external CDNs, so an internet connection is needed on first use. GazeCloud also requires an internet connection and the page origin must be registered with [GazeRecorder](https://api.gazerecorder.com/register/). Speech voices are provided by the browser and operating system; available languages vary by device. The optional BERON voice also requires an internet connection.
 
 The reader can also be opened as static files, but account features require `node server.js`.
 
@@ -42,6 +42,7 @@ The reader can also be opened as static files, but account features require `nod
 - With an account, profile data is stored in `data/users.json` by the local Node server. Passwords are stored as salted scrypt hashes; session tokens are held in HTTP-only cookies.
 - When loading an article by URL, the page address is sent to the configured text-extraction services (Jina Reader, with AllOrigins as a fallback). To avoid sending a URL to those services, copy and paste the article text instead.
 - Browser speech synthesis uses the voices available to the browser and device.
+- Selecting the BERON voice sends individual Bulgarian words to `beron.mon.bg` to look up official recordings. Words without a matching recording use the browser voice.
 - Photo OCR runs in the browser on a user-selected image; GazeRead does not upload the image to its server.
 
 This is a small prototype server with a JSON-file data store, intended for local use and experimentation rather than deployment as a public multi-user service.
