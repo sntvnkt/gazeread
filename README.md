@@ -9,6 +9,7 @@ The project is designed to run in a browser with an ordinary webcam—no dedicat
 - **Webcam gaze tracking:** MediaPipe Face Landmarker detects facial and iris landmarks in the browser. A per-user ridge-regression model maps those features to screen coordinates.
 - **Optional cloud tracking:** GazeCloudAPI can calibrate and provide gaze coordinates online. It is loaded only when selected; the user must explicitly acknowledge the external camera-data processing before starting it.
 - **Calibration and accuracy check:** Full calibration collects gaze samples at 13 screen points. A saved calibration can be checked with six points on later visits.
+- **Glasses support (local mode):** Save separate gaze calibrations with and without glasses, then switch between them when eyewear changes.
 - **In-place reading support:** A word that holds the reader’s gaze is enlarged without opening an overlay. Press **Shift** if it was read successfully; click it for syllable breakdown and speech.
 - **Personal adaptation:** A small online logistic-regression model learns from Shift and help clicks to estimate which words may be difficult and adjust dwell timing. Clicks can also provide additional gaze calibration samples.
 - **Accessible reading controls:** Adjustable font, text size, line spacing, voice and speech rate; reading ruler; light/dark theme; optional mouse-based interaction; hard-word list and practice.

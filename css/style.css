@@ -298,7 +298,7 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
   position: fixed; z-index: 90; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
   background: var(--accent); border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--accent);
   pointer-events: none; display: none; opacity: .45;
-  transition: left .25s ease-out, top .25s ease-out;
+  transition: opacity .2s;
 }
 
 /* увеличена дума направо в текста – не закрива нищо, само избутва съседите встрани */

@@ -58,6 +58,7 @@
     $('cloudPrivacy').hidden = settings.gazeProvider !== 'cloud';
     $('cloudConsentLabel').hidden = settings.gazeProvider !== 'cloud';
     $('cloudRegistration').hidden = settings.gazeProvider !== 'cloud';
+    $('localGlassesOption').hidden = settings.gazeProvider !== 'local';
     invalidateRects();
   }
 
@@ -733,7 +734,7 @@
   $('stopBtn').addEventListener('click', stopSpeech);
 
   // ---------------- проследяване ----------------
-  const tracking = { active: false, mode: null, calibrated: false, distanceChanged: false };
+  const tracking = { active: false, mode: null, calibrated: false, distanceChanged: false, faceVisible: null };
   let lastPoint = null;              // изгладена точка
   let rects = null;                  // кеш с позициите на думите
   const scores = new Map();          // натрупано време на поглед върху всяка дума
@@ -838,11 +839,8 @@
 
     if (settings.dotOpacity > 0 && ['camera', 'cloud'].includes(tracking.mode)) {
       dotEl.classList.add('on');
-      // „мъртва зона“: малките трептения на погледа не местят точката
-      if (!dotPos || Math.hypot(lastPoint.x - dotPos.x, lastPoint.y - dotPos.y) > 35) {
-        dotPos = { x: lastPoint.x, y: lastPoint.y };
-        dotEl.style.left = dotPos.x + 'px'; dotEl.style.top = dotPos.y + 'px';
-      }
+      dotPos = { x: lastPoint.x, y: lastPoint.y };
+      dotEl.style.left = dotPos.x + 'px'; dotEl.style.top = dotPos.y + 'px';
     }
 
     const el = tracking.mode === 'camera'
@@ -1054,7 +1052,24 @@
   }
 
   function onEngineStatus(st) {
+    const lostFace = tracking.faceVisible === true && !st.face;
+    const foundFace = tracking.faceVisible === false && st.face;
+    const distanceChanged = tracking.distanceChanged !== !!st.distanceChanged;
+    tracking.faceVisible = !!st.face;
     tracking.distanceChanged = !!st.distanceChanged;
+    if (lostFace) {
+      lastPoint = null; dotPos = null; lastFrame = 0;
+      scores.clear(); lineState.line = null; lineState.pending = null; lineState.pendingT = 0; drift.y = 0;
+      if (watchingEl) watchingEl.classList.remove('watching');
+      watchingEl = null;
+    }
+    if (!calib.classList.contains('show') && tracking.mode === 'camera') {
+      if (lostFace) setStatus('busy', 'Не виждам лице – погледни към камерата');
+      else if (foundFace) setStatus(st.distanceChanged ? 'busy' : 'on',
+        st.distanceChanged ? 'Позицията се промени – продължавам проследяването' : 'Камерата следи погледа');
+      else if (distanceChanged) setStatus(st.distanceChanged ? 'busy' : 'on',
+        st.distanceChanged ? 'Позицията се промени – продължавам проследяването' : 'Камерата следи погледа');
+    }
     if (!calib.classList.contains('show') || $('calibMsg').classList.contains('hidden')) return;
     const W = video.videoWidth || 1280;
     setCheck('chkFace', st.face ? 'ok' : 'bad', st.face ? 'Лицето се вижда' : 'Не виждам лице – погледни към камерата');
@@ -1081,7 +1096,7 @@
   }
 
   function onEngineGaze(x, y) {
-    if (tracking.mode === 'camera' && !tracking.calibrating && !tracking.distanceChanged) onGazePoint(x, y, 0.6);
+    if (tracking.mode === 'camera' && !tracking.calibrating) onGazePoint(x, y, 0.8);
   }
 
   // ---- обяснение на проблемите с камерата (с конкретни стъпки) ----

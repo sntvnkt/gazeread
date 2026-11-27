@@ -183,7 +183,13 @@ class GazeEngine {
     }
     const lm = res && res.faceLandmarks && res.faceLandmarks[0];
     this.status.face = !!lm;
-    if (!lm) { this.status.blink = false; this.emit('status', this.status); return; }
+    if (!lm) {
+      this.status.blink = false;
+      this._raw = [];
+      this.fx.reset(); this.fy.reset();
+      this.emit('status', this.status);
+      return;
+    }
     const W = this.video.videoWidth, H = this.video.videoHeight;
     const P = (i) => ({ x: lm[i].x * W, y: lm[i].y * H });
     const mat = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0] && res.facialTransformationMatrixes[0].data;
@@ -216,8 +222,10 @@ class GazeEngine {
       // когато лицето е далеч (малки очи в кадъра), шумът е по-голям → гледаме повече кадри
       const far = f.eyeW / (W || 1) < 0.022;
       const win = far ? 9 : 5;
-      const cutoff = far ? 0.25 : 0.4;
+      const cutoff = far ? 0.6 : 1.0;
+      const beta = far ? 0.006 : 0.01;
       if (this.fx.minCutoff !== cutoff) { this.fx.minCutoff = cutoff; this.fy.minCutoff = cutoff; }
+      if (this.fx.beta !== beta) { this.fx.beta = beta; this.fy.beta = beta; }
       this._raw = this._raw || [];
       this._raw.push(this._predict(f.vec));
       while (this._raw.length > win) this._raw.shift();
