@@ -179,4 +179,8 @@ http.createServer(async (req, res) => {
     console.error(e);
     if (!res.headersSent) send(res, 500, { error: 'Грешка в сървъра.' });
   }
-}).listen(PORT, () => console.log(`GazeRead: http://localhost:${PORT}`));
+}).listen(PORT, () => {
+  console.log(`GazeRead: http://localhost:${PORT}`);
+  console.log('Важно: камерата работи само на http://localhost (на същия компютър) или през https://.');
+  console.log('От друг компютър през http://<IP-адрес> камерата ще бъде спряна от браузъра.');
+});

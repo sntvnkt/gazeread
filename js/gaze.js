@@ -90,25 +90,52 @@ class GazeEngine {
   on(evt, cb) { this.listeners[evt].push(cb); }
   emit(evt, ...a) { for (const cb of this.listeners[evt]) cb(...a); }
 
-  async start(video) {
+  /** Отваря камерата; при неуспех опитва с все по-прости настройки (някои лаптопи не приемат 1280×720/30fps). */
+  static async openCamera(deviceId) {
+    const dev = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' };
+    const tries = [
+      { ...dev, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      { ...dev, width: { ideal: 640 }, height: { ideal: 480 } },
+      deviceId ? { deviceId: { exact: deviceId } } : true,
+      true,
+    ];
+    let last = null;
+    for (const video of tries) {
+      try { return await navigator.mediaDevices.getUserMedia({ video, audio: false }); } catch (e) {
+        last = e;
+        if (e.name === 'NotAllowedError' || e.name === 'SecurityError') break; // забрана – няма смисъл да опитваме пак
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+    if (last) last.stage = 'camera';
+    throw last;
+  }
+
+  async start(video, deviceId) {
     this.video = video;
-    const [{ FaceLandmarker, FilesetResolver }, stream] = await Promise.all([
-      import(MP_URL),
-      navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user', frameRate: { ideal: 30 } }, audio: false }),
-    ]);
+    const modP = import(MP_URL).catch((e) => { e.stage = 'model'; throw e; });
+    modP.catch(() => {});
+    const stream = await GazeEngine.openCamera(deviceId);
     this.stream = stream;
-    video.srcObject = stream;
-    video.muted = true; video.playsInline = true;
-    await video.play();
-    if (!this.landmarker) {
-      const fs = await FilesetResolver.forVisionTasks(WASM_URL);
-      const opts = (delegate) => ({
-        baseOptions: { modelAssetPath: MODEL_URL, delegate },
-        runningMode: 'VIDEO', numFaces: 1,
-        outputFacialTransformationMatrixes: true, outputFaceBlendshapes: false,
-      });
-      try { this.landmarker = await FaceLandmarker.createFromOptions(fs, opts('GPU')); }
-      catch (e) { this.landmarker = await FaceLandmarker.createFromOptions(fs, opts('CPU')); }
+    try {
+      const { FaceLandmarker, FilesetResolver } = await modP;
+      video.srcObject = stream;
+      video.muted = true; video.playsInline = true;
+      await video.play().catch(() => {});
+      if (!this.landmarker) {
+        const fs = await FilesetResolver.forVisionTasks(WASM_URL);
+        const opts = (delegate) => ({
+          baseOptions: { modelAssetPath: MODEL_URL, delegate },
+          runningMode: 'VIDEO', numFaces: 1,
+          outputFacialTransformationMatrixes: true, outputFaceBlendshapes: false,
+        });
+        try { this.landmarker = await FaceLandmarker.createFromOptions(fs, opts('GPU')); }
+        catch (e) { this.landmarker = await FaceLandmarker.createFromOptions(fs, opts('CPU')); }
+      }
+    } catch (e) {
+      if (!e.stage) e.stage = 'model';
+      this.stop();
+      throw e;
     }
     this.running = true;
     this._lastVideoTime = -1;

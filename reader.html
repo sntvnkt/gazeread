@@ -49,6 +49,18 @@
   </div>
 </dialog>
 
+<!-- проблем с камерата -->
+<dialog id="camErr" class="acc-dlg">
+  <button class="dlg-close" id="camErrClose" aria-label="Затвори">×</button>
+  <h2 id="camErrTitle">Камерата не тръгна</h2>
+  <div id="camErrBody" class="cam-err-body"></div>
+  <p class="hint" id="camErrCode"></p>
+  <div class="row">
+    <button class="btn" id="camErrRetry">🔄 Опитай пак</button>
+    <button class="btn ghost small" id="camErrMouse">🖱️ Използвай мишката</button>
+  </div>
+</dialog>
+
 <main class="reader-layout">
   <!-- ===== странична лента ===== -->
   <aside class="side">
@@ -72,6 +84,10 @@
         <button class="btn ghost small" id="testBtn" disabled>Тест на точността</button>
       </div>
       <p class="hint" id="accuracyText"></p>
+      <div class="field" style="margin-top:12px" id="camField" hidden>
+        <label for="camSelect">Камера</label>
+        <select id="camSelect"><option value="">Автоматично</option></select>
+      </div>
       <label class="toggle" style="margin-top:12px"><input type="checkbox" id="mouseMode"> Режим с мишка (без камера)</label>
       <div class="field" style="margin-top:6px">
         <label for="dotOpacity">Видимост на точката на погледа: <b id="dotVal">45%</b></label>

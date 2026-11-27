@@ -26,7 +26,7 @@
   // ---------------- настройки ----------------
   const settings = Object.assign({
     dwell: 1.5, size: 26, spacing: 2.2, font: '"Lexend", sans-serif', rate: 0.8, voice: '',
-    ruler: false, autoSpeak: false, dotOpacity: 45, showVideo: false, mouseMode: false, learnClicks: true, autoDwell: true, article: false, stay: 3,
+    ruler: false, autoSpeak: false, dotOpacity: 45, showVideo: false, mouseMode: false, learnClicks: true, autoDwell: true, article: false, stay: 3, camId: '',
     gazeProvider: 'local',
   }, store.get('settings', {}));
   if (!['local', 'cloud'].includes(settings.gazeProvider)) settings.gazeProvider = 'local';
@@ -903,7 +903,8 @@
       else setCheck('chkDist', 'ok', 'Разстоянието е приемливо');
     } else setCheck('chkDist', '', 'Разстояние до екрана');
     if (st.brightness != null) {
-      if (st.brightness < 55) setCheck('chkLight', 'bad', 'Твърде тъмно – светни лампа пред себе си');
+      if (st.brightness < 12) setCheck('chkLight', 'bad', 'Картината е черна – камерата е закрита или е избрана грешна камера (виж „Камера“ вляво)');
+      else if (st.brightness < 55) setCheck('chkLight', 'bad', 'Твърде тъмно – светни лампа пред себе си');
       else if (st.brightness < 85) setCheck('chkLight', 'mid', 'Малко тъмно – повече светлина ще помогне');
       else setCheck('chkLight', 'ok', 'Осветлението е добро');
     }
@@ -917,10 +918,87 @@
     if (tracking.mode === 'camera' && !tracking.calibrating && !tracking.distanceChanged) onGazePoint(x, y, 0.6);
   }
 
+  // ---- обяснение на проблемите с камерата (с конкретни стъпки) ----
+  const isEdge = /Edg\//.test(navigator.userAgent);
+  const flagsUrl = (isEdge ? 'edge' : 'chrome') + '://flags/#unsafely-treat-insecure-origin-as-secure';
+  function cameraProblem(e) {
+    const name = (e && e.name) || (e && e.message) || 'Error';
+    const o = location.origin;
+    if (e === 'insecure') return ['Браузърът спира камерата на този адрес', `
+      <p>Сайтът е отворен на <code>${escapeHtml(o)}</code>. Браузърите пускат камерата само на адрес с <b>https://</b> или на <b>localhost</b>.</p>
+      <ol>
+        <li><b>Най-лесно:</b> копирай папката GazeRead на този лаптоп, пусни <code>node server.js</code> и отвори <code>http://localhost:8080/reader.html</code>.</li>
+        <li><b>Или</b> в адресната лента отвори <code>${flagsUrl}</code>, впиши <code>${escapeHtml(o)}</code>, избери <b>Enabled</b> и рестартирай браузъра.</li>
+        <li><b>Или</b> качи сайта на хостинг с https://.</li>
+      </ol>`];
+    if (e === 'nobrowser') return ['Този браузър няма достъп до камера', '<p>Отвори GazeRead в <b>Google Chrome</b> или <b>Microsoft Edge</b> (последна версия).</p>'];
+    if (e && e.stage === 'model') return ['Не успях да заредя проследяването', `
+      <p>Камерата работи, но моделът за разпознаване на лице не се зареди. Първия път той се изтегля от интернет.</p>
+      <ol>
+        <li>Провери дали има интернет.</li>
+        <li>Изключи блокера на реклами (AdBlock, uBlock) за този сайт – понякога спира <code>cdn.jsdelivr.net</code> и <code>storage.googleapis.com</code>.</li>
+        <li>В училищна или фирмена мрежа тези адреси може да са забранени – опитай през друга мрежа (напр. от телефона).</li>
+      </ol>`];
+    if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') return ['Няма разрешение за камерата', `
+      <ol>
+        <li>Кликни иконата <b>🔒 / камера</b> вляво от адреса → <b>Камера → Разреши</b> и презареди страницата.</li>
+        <li>В Windows: <b>Настройки → Поверителност и защита → Камера</b> – включи „Достъп до камерата“ и „Разреши на приложенията да имат достъп“ (и за настолни приложения).</li>
+        <li>Някои лаптопи имат <b>капаче</b> пред камерата или <b>клавиш</b> за изключването ѝ (иконата с камера на F-клавишите).</li>
+      </ol>`];
+    if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') return ['Камерата е заета или не може да се включи', `
+      <ol>
+        <li>Затвори програмите, които може да ползват камерата: <b>Zoom, Teams, Skype, Discord, „Камера“</b>, други раздели с видео.</li>
+        <li>Ако лаптопът има няколко камери, избери друга от „Камера“ в лентата вляво.</li>
+        <li>Затвори изцяло браузъра и го отвори пак. Ако не помогне – рестартирай компютъра.</li>
+      </ol>`];
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError') return ['Не е намерена камера', `
+      <ol>
+        <li>Провери дали камерата не е изключена с клавиш или капаче.</li>
+        <li>Ако е външна камера – включи я в друг USB порт.</li>
+        <li>В Windows отвори приложението <b>„Камера“</b> – ако и там не работи, проблемът е в драйвера.</li>
+      </ol>`];
+    if (e && e.message === 'engine') return ['Страницата не се зареди докрай', '<p>Презареди страницата (Ctrl+F5) и опитай пак. Провери дали има интернет.</p>'];
+    return ['Камерата не тръгна', `
+      <ol>
+        <li>Презареди страницата и опитай пак.</li>
+        <li>Използвай Chrome или Edge и провери дали камерата работи в приложението „Камера“ на Windows.</li>
+        <li>Ако проблемът остане, изпрати ми кода по-долу.</li>
+      </ol>`];
+  }
+  function showCameraProblem(e) {
+    const [title, body] = cameraProblem(e);
+    $('camErrTitle').textContent = '📷 ' + title;
+    $('camErrBody').innerHTML = body;
+    const code = typeof e === 'string' ? e : `${(e && e.name) || 'Error'}${e && e.stage ? ' [' + e.stage + ']' : ''}: ${(e && e.message) || ''}`;
+    $('camErrCode').textContent = 'Код на грешката: ' + code + ' · ' + location.origin;
+    const d = $('camErr');
+    if (!d.open) d.showModal();
+  }
+  $('camErrClose').addEventListener('click', () => $('camErr').close());
+  $('camErrRetry').addEventListener('click', () => { $('camErr').close(); startCamera(); });
+  $('camErrMouse').addEventListener('click', () => { $('camErr').close(); settings.mouseMode = true; $('mouseMode').checked = true; saveSettings(); startMouseMode(); });
+
+  // избор на камера (лаптопите с Windows Hello имат и инфрачервена камера, която дава черна картина)
+  async function fillCameras() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    let cams = [];
+    try { cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput'); } catch (e) { return; }
+    const sel = $('camSelect');
+    sel.innerHTML = '<option value="">Автоматично</option>' + cams.map((c, i) =>
+      `<option value="${escapeHtml(c.deviceId)}">${escapeHtml(c.label || 'Камера ' + (i + 1))}</option>`).join('');
+    sel.value = cams.some((c) => c.deviceId === settings.camId) ? settings.camId : '';
+    $('camField').hidden = cams.length < 2;
+  }
+  $('camSelect').addEventListener('change', (e) => {
+    settings.camId = e.target.value; saveSettings();
+    if (tracking.mode === 'camera') startCamera();
+  });
+  fillCameras();
+
   async function startCamera() {
     if (settings.gazeProvider === 'cloud') return startCloudTracking();
-    if (!window.isSecureContext) { toast('Камерата работи само през https:// или localhost.', 5000); return; }
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('Този браузър няма достъп до камера. Опитай с Chrome или Edge.', 5000); return; }
+    if (!window.isSecureContext) { showCameraProblem('insecure'); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCameraProblem('nobrowser'); return; }
     stopTracking(true);
     setStatus('busy', 'Стартиране на камерата…');
     $('eyeBtn').disabled = true;
@@ -931,7 +1009,8 @@
       // запазено калибриране от предишни сесии → само бърза проверка вместо пълно калибриране
       if (!engine.model) engine.importData(store.get('calib', null));
       showFaceCheck();
-      await engine.start(video);
+      await engine.start(video, settings.camId || undefined);
+      fillCameras(); // след разрешението вече се виждат имената на камерите
       tracking.active = true; tracking.mode = 'camera';
       $('eyeBtn').textContent = 'Изключи';
       $('recalBtn').disabled = false;
@@ -941,13 +1020,9 @@
     } catch (e) {
       console.error(e);
       calib.classList.remove('show');
-      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
-      const noCam = e && (e.name === 'NotFoundError' || e.name === 'OverconstrainedError');
-      setStatus('off', denied ? 'Няма разрешение за камерата' : noCam ? 'Не е намерена камера' : 'Грешка при стартиране');
-      toast(denied ? 'Разреши достъпа до камерата (иконата с катинарче до адреса) и опитай пак.'
-        : noCam ? 'Не намерих камера. Провери дали е включена и не се ползва от друга програма.'
-          : 'Не успях да заредя проследяването. Провери интернет връзката и опитай пак.', 6000);
       if (engine) engine.stop();
+      setStatus('off', cameraProblem(e)[0]);
+      showCameraProblem(e);
     } finally {
       $('eyeBtn').disabled = false;
     }
