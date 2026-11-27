@@ -408,6 +408,17 @@ textarea { min-height: 220px; resize: vertical; font-family: var(--read-font); l
 .tab:hover { color: var(--text); }
 .tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 0 0 1px var(--border); }
 
+/* — текст от снимка — */
+.photo-cam { margin-top: 16px; }
+.photo-frame { background: #000; border-radius: var(--radius); overflow: hidden; }
+.photo-frame video { display: block; width: 100%; max-height: 60vh; object-fit: contain; }
+.photo-cam .row { margin-top: 12px; }
+.photo-preview { margin-top: 16px; }
+.photo-preview img { display: block; max-width: 100%; max-height: 260px; margin: 0 auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+.photo-progress { margin-top: 14px; }
+.photo-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.photo-bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width .2s ease; }
+
 .hint { font-size: 14.5px; line-height: 1.55; color: var(--muted); margin: 8px 0 0; }
 .error { color: var(--danger); font-size: 15px; font-weight: 700; margin-top: 8px; }
 .error:empty { display: none; }

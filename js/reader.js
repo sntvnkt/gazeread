@@ -213,11 +213,16 @@
   });
 
   // табове
-  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
-    $('tab-text').hidden = t.dataset.tab !== 'text';
-    $('tab-url').hidden = t.dataset.tab !== 'url';
-  }));
+  // (само табовете на панела с текста – диалогът за акаунт има свои)
+  const inputTabs = document.querySelectorAll('#inputPanel .tab');
+  function showTab(name) {
+    inputTabs.forEach((x) => x.classList.toggle('active', x.dataset.tab === name));
+    $('tab-text').hidden = name !== 'text';
+    $('tab-url').hidden = name !== 'url';
+    $('tab-photo').hidden = name !== 'photo';
+    if (name !== 'photo') closePhotoCamera();
+  }
+  inputTabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
   $('readBtn').addEventListener('click', () => {
     renderText($('textIn').value);
@@ -490,6 +495,186 @@
     renderText(text);
     if (looksLikeArticle(text)) setArticle(true, 'url'); else toast('Текстът е зареден ✔');
     area.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  // ---------------- текст от снимка (OCR с Tesseract.js – изцяло в браузъра) ----------------
+  const OCR_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  let ocrScript = null, ocrWorker = null, ocrBusy = false;
+  let photoStream = null, photoOwnStream = false;
+
+  function loadTesseract() {
+    if (window.Tesseract) return Promise.resolve(window.Tesseract);
+    if (ocrScript) return ocrScript;
+    ocrScript = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = OCR_URL; s.async = true;
+      s.onload = () => (window.Tesseract ? resolve(window.Tesseract) : reject(new Error('no Tesseract')));
+      s.onerror = () => { ocrScript = null; reject(new Error('load')); };
+      document.head.appendChild(s);
+    });
+    return ocrScript;
+  }
+
+  function photoProgress(p, msg) {
+    $('photoProgress').hidden = false;
+    $('photoBar').style.width = Math.round(Math.max(0, Math.min(1, p)) * 100) + '%';
+    $('photoStatus').textContent = msg;
+  }
+
+  const OCR_STEPS = {
+    'loading tesseract core': 'Зареждам разпознаването…',
+    'initializing tesseract': 'Подготвям разпознаването…',
+    'loading language traineddata': 'Изтеглям езиковия модел (само първия път)…',
+    'initializing api': 'Подготвям разпознаването…',
+    'recognizing text': 'Разпознавам текста…',
+  };
+  async function getOcrWorker() {
+    if (ocrWorker) return ocrWorker;
+    const T = await loadTesseract();
+    ocrWorker = await T.createWorker(['bul', 'eng'], 1, {
+      logger: (m) => {
+        const label = OCR_STEPS[m.status];
+        if (label) photoProgress(m.status === 'recognizing text' ? m.progress : m.progress * 0.15, label);
+      },
+    });
+    return ocrWorker;
+  }
+
+  /** Подготвя снимката: разумен размер (малките се увеличават) и сиви тонове – по-точно разпознаване. */
+  function prepareImage(src, w, h) {
+    const longSide = Math.max(w, h);
+    const scale = longSide > 2600 ? 2600 / longSide : longSide < 1400 ? Math.min(2, 1400 / longSide) : 1;
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+    const ctx = c.getContext('2d');
+    ctx.filter = 'grayscale(1) contrast(1.15)';
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  // латински букви, които изглеждат като кирилски – в българските думи ги заменяме
+  const LAT2CYR = { a: 'а', e: 'е', o: 'о', p: 'р', c: 'с', x: 'х', y: 'у', k: 'к', A: 'А', B: 'В', E: 'Е', K: 'К', M: 'М', H: 'Н', O: 'О', P: 'Р', C: 'С', T: 'Т', X: 'Х' };
+  function fixMixedScript(word) {
+    const cyr = (word.match(/[Ѐ-ӿ]/g) || []).length;
+    const lat = (word.match(/[A-Za-z]/g) || []).length;
+    if (!cyr || cyr < lat) return word;
+    return word.replace(/[aeopcxykABEKMHOPCTX]/g, (ch) => LAT2CYR[ch] || ch);
+  }
+
+  /** Чисти разпознатия текст: пренесени думи, редове → абзаци, смесени букви. */
+  function cleanOcrText(raw) {
+    let t = (raw || '').replace(/\r/g, '').replace(/[ \t]+/g, ' ');
+    t = t.replace(/(\p{L})[-­‐]\s*\n\s*(\p{Ll})/gu, '$1$2');           // при-\nключение → приключение
+    const paras = t.split(/\n\s*\n/).map((p) => p
+      .split('\n').map((l) => l.trim())
+      .filter((l) => l && /[\p{L}\p{N}]/u.test(l))                     // редове само от символи
+      .join(' ')
+      .replace(/\s+([,.;:!?…])/g, '$1')
+      .replace(/[\p{L}\p{M}]+/gu, fixMixedScript)
+      .trim());
+    return paras.filter((p) => p.length > 1).join('\n\n');
+  }
+
+  async function recognizePhoto(canvas) {
+    if (ocrBusy) return;
+    ocrBusy = true;
+    const err = $('photoErr'); err.textContent = '';
+    $('photoImg').src = canvas.toDataURL('image/jpeg', 0.85);
+    $('photoPreview').hidden = false;
+    $('photoCamBtn').disabled = true; $('photoFileBtn').disabled = true;
+    photoProgress(0, 'Зареждам разпознаването…');
+    try {
+      const worker = await getOcrWorker();
+      const { data } = await worker.recognize(canvas);
+      const text = cleanOcrText(data.text);
+      // поне няколко истински думи и разумна увереност – иначе е „шум“ от фона, а не текст
+      const realWords = (text.match(/\p{L}{3,}/gu) || []).length;
+      if (realWords < 2 || data.confidence < 35) {
+        err.textContent = 'Не открих текст на снимката. Опитай с повече светлина, по-близо до листа и без наклон.';
+        return;
+      }
+      $('textIn').value = text;
+      renderText(text);
+      showTab('text');
+      area.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      toast(data.confidence < 60
+        ? 'Текстът е разпознат, но може да има грешки – провери го в полето „Постави текст“ и поправи.'
+        : 'Текстът от снимката е разпознат ✔', 6000);
+    } catch (e) {
+      console.error(e);
+      err.textContent = e && e.message === 'load'
+        ? 'Не успях да заредя разпознаването на текст. Провери интернет връзката (първия път се изтегля от интернет) и дали блокер на реклами не спира cdn.jsdelivr.net.'
+        : 'Нещо се обърка при разпознаването. Опитай отново или с друга снимка.';
+    } finally {
+      ocrBusy = false;
+      $('photoProgress').hidden = true;
+      $('photoCamBtn').disabled = false; $('photoFileBtn').disabled = false;
+    }
+  }
+
+  // снимка от файл (на телефон браузърът предлага и камерата)
+  $('photoFileBtn').addEventListener('click', () => $('photoFile').click());
+  $('photoFile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    closePhotoCamera();
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      await recognizePhoto(prepareImage(bmp, bmp.width, bmp.height));
+      bmp.close && bmp.close();
+    } catch (er) {
+      $('photoErr').textContent = 'Не мога да отворя този файл като снимка. Опитай с JPG или PNG.';
+    }
+  });
+
+  // снимка с камерата
+  async function openPhotoCamera() {
+    $('photoErr').textContent = '';
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      $('photoErr').textContent = 'Камерата работи само през https:// или localhost. Можеш да избереш готова снимка.';
+      return;
+    }
+    const pv = $('photoVideo');
+    try {
+      // ако камерата вече следи погледа, ползваме същия поток (иначе Windows казва „камерата е заета“)
+      if (tracking.mode === 'camera' && video.srcObject) { photoStream = video.srcObject; photoOwnStream = false; }
+      else {
+        const base = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+        try {
+          photoStream = await navigator.mediaDevices.getUserMedia({ video: { ...base, facingMode: { ideal: 'environment' } }, audio: false });
+        } catch (e1) {
+          if (e1.name === 'NotAllowedError' || e1.name === 'SecurityError') throw e1;
+          photoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
+        photoOwnStream = true;
+      }
+      pv.srcObject = photoStream; pv.muted = true;
+      await pv.play().catch(() => {});
+      $('photoCam').hidden = false; $('photoPreview').hidden = true;
+    } catch (e) {
+      console.error(e);
+      closePhotoCamera();
+      $('photoErr').textContent = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')
+        ? 'Няма разрешение за камерата. Разреши я от иконата до адреса или избери готова снимка.'
+        : 'Не успях да включа камерата. Затвори други програми, които я ползват, или избери готова снимка.';
+    }
+  }
+  function closePhotoCamera() {
+    const pv = $('photoVideo');
+    if (photoStream && photoOwnStream) photoStream.getTracks().forEach((t) => t.stop());
+    photoStream = null; photoOwnStream = false;
+    if (pv) pv.srcObject = null;
+    if ($('photoCam')) $('photoCam').hidden = true;
+  }
+  $('photoCamBtn').addEventListener('click', openPhotoCamera);
+  $('photoCamClose').addEventListener('click', closePhotoCamera);
+  $('photoShot').addEventListener('click', () => {
+    const pv = $('photoVideo');
+    if (!pv.videoWidth) { $('photoErr').textContent = 'Камерата още не е готова – опитай след секунда.'; return; }
+    const canvas = prepareImage(pv, pv.videoWidth, pv.videoHeight);
+    closePhotoCamera();
+    recognizePhoto(canvas);
   });
 
   // ---------------- трудни думи ----------------

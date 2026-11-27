@@ -173,6 +173,7 @@
       <div class="tabs" role="tablist">
         <button class="tab active" data-tab="text">✍️ Постави текст</button>
         <button class="tab" data-tab="url">🌐 От сайт</button>
+        <button class="tab" data-tab="photo">📷 От снимка</button>
       </div>
       <div id="tab-text">
         <textarea id="textIn" placeholder="Постави или напиши текст тук… Копиран текст от сайт запазва заглавията, списъците и картинките."></textarea>
@@ -188,6 +189,28 @@
         </div>
         <p class="hint">Jina зарежда страницата в браузърен режим и извлича основния текст; менютата, страничните блокове и картинките се пропускат. При нужда се използва AllOrigins. За страници със списъци постави адреса на конкретното съдържание.</p>
         <p class="error" id="urlErr"></p>
+      </div>
+      <div id="tab-photo" hidden>
+        <div class="row">
+          <button class="btn" id="photoCamBtn">📷 Снимай с камерата</button>
+          <button class="btn ghost" id="photoFileBtn">🖼️ Избери снимка</button>
+          <input type="file" id="photoFile" accept="image/*" hidden>
+        </div>
+        <div class="photo-cam" id="photoCam" hidden>
+          <div class="photo-frame"><video id="photoVideo" playsinline muted></video></div>
+          <p class="hint">Дръж листа равно и близо до камерата, така че текстът да заема почти целия кадър.</p>
+          <div class="row">
+            <button class="btn" id="photoShot">📸 Снимай</button>
+            <button class="btn ghost" id="photoCamClose">Отказ</button>
+          </div>
+        </div>
+        <div class="photo-preview" id="photoPreview" hidden><img id="photoImg" alt="Снимката, от която се разпознава текстът"></div>
+        <div class="photo-progress" id="photoProgress" hidden>
+          <div class="photo-bar"><span id="photoBar"></span></div>
+          <p class="hint" id="photoStatus" aria-live="polite"></p>
+        </div>
+        <p class="error" id="photoErr"></p>
+        <p class="hint">Снимай страница от книга, лист или екран и GazeRead ще разпознае текста и ще го покаже за четене. Разпознаването става в браузъра ти – снимката не се изпраща никъде. Първия път се изтегля езиковият модел (около 4 MB). За най-добър резултат: добра светлина, равен лист, снимка отгоре.</p>
       </div>
     </section>
 
