@@ -26,7 +26,7 @@
   // ---------------- настройки ----------------
   const settings = Object.assign({
     dwell: 1.5, size: 26, spacing: 2.2, font: '"Lexend", sans-serif', rate: 0.8, voice: '',
-    ruler: false, autoSpeak: false, dotOpacity: 45, showVideo: false, mouseMode: false, learnClicks: true, autoDwell: true, article: false, stay: 3, camId: '',
+    ruler: false, autoSpeak: false, dotOpacity: 45, showVideo: false, mouseMode: false, learnClicks: true, autoDwell: true, article: false, stay: 3, camId: '', glasses: false,
     gazeProvider: 'local',
   }, store.get('settings', {}));
   if (!['local', 'cloud'].includes(settings.gazeProvider)) settings.gazeProvider = 'local';
@@ -34,6 +34,8 @@
   // старата стойност 15% беше прекалено бледа – вдигаме я веднъж
   if (!settings.v || settings.v < 2) { if (settings.dotOpacity < 45) settings.dotOpacity = 45; settings.v = 2; }
   const saveSettings = () => store.set('settings', settings);
+  // отделно калибриране с и без очила (старото „calib“ остава за „без очила“)
+  const calibKey = (glasses = settings.glasses) => (glasses ? 'calib_glasses' : 'calib');
   const fmt = (n, d = 1) => Number(n).toFixed(d).replace('.', ',');
 
   function applySettings() {
@@ -1064,7 +1066,7 @@
       engine = await waitForEngine();
       if (!engineBound) { engine.on('status', onEngineStatus); engine.on('gaze', onEngineGaze); engineBound = true; }
       // запазено калибриране от предишни сесии → само бърза проверка вместо пълно калибриране
-      if (!engine.model) engine.importData(store.get('calib', null));
+      if (!engine.model) engine.importData(store.get(calibKey(), null));
       showFaceCheck();
       await engine.start(video, settings.camId || undefined);
       fillCameras(); // след разрешението вече се виждат имената на камерите
@@ -1109,9 +1111,30 @@
   /** Запазва калибрирането (и наученото докато четеш) в профила. */
   function saveCalibration() {
     if (!window.GazeEngine || !window.GazeEngine.model) return;
-    store.set('calib', window.GazeEngine.exportData());
+    store.set(calibKey(), window.GazeEngine.exportData());
     renderProfile();
   }
+
+  // смяна „с очила“ ↔ „без очила“: пазим текущото калибриране и зареждаме другото
+  $('glasses').checked = !!settings.glasses;
+  $('glasses').addEventListener('change', () => {
+    const engine = window.GazeEngine;
+    if (engine && engine.model) store.set(calibKey(), engine.exportData());
+    settings.glasses = $('glasses').checked; saveSettings();
+    let loaded = false;
+    if (engine) { engine.clear(); loaded = engine.importData(store.get(calibKey(), null)); }
+    const label = settings.glasses ? 'с очила' : 'без очила';
+    if (tracking.mode === 'camera' && engine) {
+      tracking.calibrating = false;
+      $('testBtn').disabled = !engine.model;
+      setStatus(loaded ? 'on' : 'busy', loaded ? 'Камерата следи погледа' : 'Нужно е калибриране');
+      showFaceCheck();
+      toast(loaded ? `Заредих калибрирането ${label}. Направи бърза проверка.` : `Няма калибриране ${label} – направи пълно калибриране.`, 5000);
+    } else {
+      toast(loaded ? `Ще се използва калибрирането ${label}.` : `Няма калибриране ${label} – ще трябва пълно калибриране.`, 4000);
+    }
+    renderProfile();
+  });
 
   function closeCalib() {
     tracking.calibrating = false;
@@ -1330,12 +1353,15 @@
   });
 
   function renderProfile() {
-    const c = store.get('calib', null);
+    const c = store.get(calibKey(), null);
+    const other = store.get(calibKey(!settings.glasses), null);
     const st = Adapt.state;
     const acc = st.accuracy.length ? st.accuracy[st.accuracy.length - 1].px : null;
     const learned = c ? new Set(c.samples.map((s) => s[4]).filter((g) => /live/.test(g))).size : 0;
     const rows = [];
-    rows.push(`<li><b>Калибриране:</b> ${c ? 'запазено (' + new Date(c.saved).toLocaleDateString('bg-BG') + ')' : 'няма запазено'}</li>`);
+    const when = (x) => (x ? 'запазено (' + new Date(x.saved).toLocaleDateString('bg-BG') + ')' : 'няма запазено');
+    rows.push(`<li><b>Калибриране ${settings.glasses ? 'с очила' : 'без очила'} (сега):</b> ${when(c)}</li>`);
+    rows.push(`<li><b>Калибриране ${settings.glasses ? 'без очила' : 'с очила'}:</b> ${when(other)}</li>`);
     if (acc != null) rows.push(`<li><b>Последна точност:</b> ~${acc} px</li>`);
     if (st.accuracy.length > 1) {
       const first = st.accuracy[0].px;
@@ -1351,8 +1377,8 @@
       : 'Запазва се само в този браузър. Влез в акаунт, за да го имаш навсякъде.';
   }
   $('forgetCalib').addEventListener('click', () => {
-    if (!confirm('Да изтрия ли запазеното калибриране? Следващия път ще трябва пълно калибриране.')) return;
-    store.set('calib', null);
+    if (!confirm(`Да изтрия ли запазеното калибриране ${settings.glasses ? 'с очила' : 'без очила'}? Следващия път ще трябва пълно калибриране.`)) return;
+    store.set(calibKey(), null);
     if (window.GazeEngine) window.GazeEngine.clear();
     renderProfile(); toast('Калибрирането е изтрито.');
   });
