@@ -97,9 +97,11 @@ class GazeEngine {
     this.listeners = { gaze: [], status: [] };
     this.fx = new OneEuro(); this.fy = new OneEuro();
     this.openBase = null;
-    this.status = { face: false, eyeWidth: 0, faceScale: 0, distanceRatio: null, distanceChanged: false, brightness: null, blink: false, fps: 0 };
+    this.status = { face: false, eyeWidth: 0, eyeQuality: 0, cameraWidth: 0, cameraHeight: 0, faceScale: 0, distanceRatio: null, distanceChanged: false, brightness: null, blink: false, fps: 0 };
     this._referenceEyeWidth = null;
     this._referenceFaceHeight = null;
+    this._screenWidth = innerWidth;
+    this._screenHeight = innerHeight;
     this._distanceSamples = [];
     this._frames = 0; this._fpsT = performance.now();
     this._canvas = document.createElement('canvas'); this._canvas.width = 32; this._canvas.height = 24;
@@ -209,10 +211,12 @@ class GazeEngine {
       return;
     }
     const W = this.video.videoWidth, H = this.video.videoHeight;
+    this.status.cameraWidth = W; this.status.cameraHeight = H;
     const P = (i) => ({ x: lm[i].x * W, y: lm[i].y * H });
     const mat = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0] && res.facialTransformationMatrixes[0].data;
     const f = this._features(P, mat, W, H);
     this.status.eyeWidth = f.eyeW;
+    this.status.eyeQuality = f.eyeQuality;
     this.status.faceScale = f.faceScale;
     this._distanceSamples.push({ eyeW: f.eyeW, faceH: f.faceH, t: now });
     while (this._distanceSamples.length && now - this._distanceSamples[0].t > 3000) this._distanceSamples.shift();
@@ -238,10 +242,10 @@ class GazeEngine {
     if (this.model) {
       // медиана от последните кадри маха единичните „скокове“;
       // когато лицето е далеч (малки очи в кадъра), шумът е по-голям → гледаме повече кадри
-      const far = f.eyeW / (W || 1) < 0.022;
-      const win = far ? 9 : 5;
-      const cutoff = far ? 0.6 : 1.0;
-      const beta = far ? 0.006 : 0.01;
+      const lowDetail = f.eyeW < 40 || f.eyeQuality < 0.55;
+      const win = lowDetail ? 9 : 5;
+      const cutoff = lowDetail ? 0.6 : 1.0;
+      const beta = lowDetail ? 0.006 : 0.01;
       if (this.fx.minCutoff !== cutoff) { this.fx.minCutoff = cutoff; this.fy.minCutoff = cutoff; }
       if (this.fx.beta !== beta) { this.fx.beta = beta; this.fy.beta = beta; }
       this._raw = this._raw || [];
@@ -289,7 +293,7 @@ class GazeEngine {
     const vec = [ex, ey, ex, ey, ey2, ey2, ex * ex, ey * ey, ex * ey, ey2 * ey2,
       ...head, ex * head[0], ey * head[1], ex * head[2], ey * head[3],
       normalizedEyeW, normalizedFaceH, normalizedFaceW, faceScale, 1];
-    return { vec, open: (l.open + r.open) / 2, eyeW, faceH, faceScale };
+    return { vec, open: (l.open + r.open) / 2, eyeW, eyeQuality: Math.max(wl, wr), faceH, faceScale };
   }
 
   // ---------- обучение ----------
@@ -343,6 +347,18 @@ class GazeEngine {
 
   clear() { this.samples = []; this.model = null; this.fx.reset(); this.fy.reset(); this._raw = []; }
 
+  resizeTargets(width, height) {
+    const sx = width / this._screenWidth, sy = height / this._screenHeight;
+    if (sx !== 1 || sy !== 1) {
+      for (const sample of this.samples) { sample.x *= sx; sample.y *= sy; }
+      if (this.model) {
+        this.model.wx = this.model.wx.map((v) => v * sx);
+        this.model.wy = this.model.wy.map((v) => v * sy);
+      }
+    }
+    this._screenWidth = width; this._screenHeight = height;
+  }
+
   // ---------- запазване между сесиите ----------
   static VERSION = 5;   // сменя се, ако признаците се променят
 
@@ -367,7 +383,7 @@ class GazeEngine {
   exportData() {
     const r = (v) => Math.round(v * 1e5) / 1e5;
     return {
-      v: GazeEngine.VERSION, w: innerWidth, h: innerHeight, saved: Date.now(),
+      v: GazeEngine.VERSION, w: this._screenWidth, h: this._screenHeight, saved: Date.now(),
       samples: this.samples.slice(-1200).map((s) => [s.f.map(r), Math.round(s.x), Math.round(s.y), s.w, String(s.g)]),
     };
   }
@@ -381,6 +397,7 @@ class GazeEngine {
       f: d.v === 4 ? upgradeLegacyFeatures(f) : f,
       x: x * sx, y: y * sy, w: Math.max(0.2, (w || 1) * 0.6), g: g.startsWith('old') ? g : session + g,
     }));
+    this._screenWidth = innerWidth; this._screenHeight = innerHeight;
     this.fit(true);
     return !!this.model;
   }

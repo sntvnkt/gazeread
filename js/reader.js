@@ -735,6 +735,9 @@
 
   // ---------------- проследяване ----------------
   const tracking = { active: false, mode: null, calibrated: false, distanceChanged: false, faceVisible: null };
+  addEventListener('resize', () => {
+    if (!tracking.calibrating && window.GazeEngine) window.GazeEngine.resizeTargets(innerWidth, innerHeight);
+  });
   let lastPoint = null;              // изгладена точка
   let rects = null;                  // кеш с позициите на думите
   const scores = new Map();          // натрупано време на поглед върху всяка дума
@@ -1075,6 +1078,11 @@
     setCheck('chkFace', st.face ? 'ok' : 'bad', st.face ? 'Лицето се вижда' : 'Не виждам лице – погледни към камерата');
     if (st.face) {
       const r = st.eyeWidth / W;
+      if (st.eyeWidth < 24 || st.eyeQuality < 0.3) {
+        setCheck('chkEyes', 'bad', `Очите са неясни (${Math.round(st.eyeWidth)} px в камера ${st.cameraWidth}×${st.cameraHeight}) – избери HD камера или приближи се`);
+      } else if (st.eyeWidth < 40 || st.eyeQuality < 0.55) {
+        setCheck('chkEyes', 'mid', `Очите са малки в кадъра (${Math.round(st.eyeWidth)} px) – повече светлина или по-висока резолюция ще помогне`);
+      } else setCheck('chkEyes', 'ok', `Очите се виждат добре (${Math.round(st.eyeWidth)} px в кадъра)`);
       if (st.distanceRatio != null) {
         if (st.distanceChanged) setCheck('chkDist', 'mid', 'Позицията се промени – остани в това разстояние');
         else setCheck('chkDist', 'ok', 'Разстоянието е стабилно');
@@ -1082,7 +1090,10 @@
       else if (r < 0.0105) setCheck('chkDist', 'mid', 'Далеч си – работи, но малко по-неточно (повече светлина помага)');
       else if (r > 0.18) setCheck('chkDist', 'bad', 'Лицето е твърде голямо – отдалечи се малко');
       else setCheck('chkDist', 'ok', 'Разстоянието е приемливо');
-    } else setCheck('chkDist', '', 'Разстояние до екрана');
+    } else {
+      setCheck('chkEyes', '', 'Очите се виждат достатъчно ясно');
+      setCheck('chkDist', '', 'Разстояние до екрана');
+    }
     if (st.brightness != null) {
       if (st.brightness < 12) setCheck('chkLight', 'bad', 'Картината е черна – камерата е закрита или е избрана грешна камера (виж „Камера“ вляво)');
       else if (st.brightness < 55) setCheck('chkLight', 'bad', 'Твърде тъмно – светни лампа пред себе си');
@@ -1348,11 +1359,15 @@
     const W = innerWidth, H = innerHeight;
     await sleep(700);
     engine.setDistanceReference();
+    const cancelSequence = () => {
+      engine.resizeTargets(innerWidth, innerHeight);
+      closeCalib();
+    };
 
     if (!testOnly) {
       engine.clear();
       for (let i = 0; i < CALIB_POINTS.length; i++) {
-        if (tracking.cancelCalib) return closeCalib();
+        if (tracking.cancelCalib) return cancelSequence();
         const [px, py] = [CALIB_POINTS[i][0] / 100 * W, CALIB_POINTS[i][1] / 100 * H];
         prog.textContent = `Гледай точката · ${i + 1} от ${CALIB_POINTS.length} · Esc за отказ`;
         let got = 0;
@@ -1379,7 +1394,7 @@
     // тест: точки, които моделът не е виждал
     const errs = [];
     for (let i = 0; i < TEST_POINTS.length; i++) {
-      if (tracking.cancelCalib) return closeCalib();
+      if (tracking.cancelCalib) return cancelSequence();
       const [px, py] = [TEST_POINTS[i][0] / 100 * W, TEST_POINTS[i][1] / 100 * H];
       prog.textContent = `Проверка на точността · ${i + 1} от ${TEST_POINTS.length}`;
       await showDotAt(px, py, 'test');
@@ -1393,14 +1408,16 @@
     }
     engine.fit(true);
     engine.resetFilter();
+    engine.resizeTargets(innerWidth, innerHeight);
     dot.className = ''; prog.textContent = '';
     if (!errs.length) return showResult('Не виждам очите ти', 'Провери светлината и опитай пак.', false);
 
     const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
     const ex = Math.round(med(errs.map((e) => e.dx))), ey = Math.round(med(errs.map((e) => e.dy)));
     const err = Math.round(Math.hypot(ex, ey));
-    const quality = err < 90 ? 'отлична' : err < 150 ? 'добра' : err < 230 ? 'средна' : 'слаба';
-    let text = `Средно отклонение: около ${err} px (хоризонтално ${ex}, вертикално ${ey}).`;
+    const errPercent = Math.round(err / Math.hypot(W, H) * 100);
+    const quality = errPercent < 6 ? 'отлична' : errPercent < 10 ? 'добра' : errPercent < 15 ? 'средна' : 'слаба';
+    let text = `Средно отклонение: около ${err} px (${errPercent}% от диагонала на екрана; хоризонтално ${ex}, вертикално ${ey}).`;
 
     // по-голям шрифт = по-големи цели за погледа
     const pitch = settings.size * settings.spacing;
@@ -1419,7 +1436,7 @@
     }
     Adapt.addAccuracy(err); saveAdapt();
     saveCalibration();
-    $('accuracyText').textContent = `Точност: ${quality} (~${err} px)`;
+    $('accuracyText').textContent = `Точност: ${quality} (~${err} px · ${errPercent}% от диагонала)`;
     $('testBtn').disabled = false;
     setStatus('on', 'Камерата следи погледа');
     showResult(`Точност: ${quality}`, text, true);
