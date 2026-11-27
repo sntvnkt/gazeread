@@ -1,10 +1,50 @@
 /*
  * GazeRead – разделяне на срички
- * Правилата са опростени, но покриват повечето думи в българския и английския език.
+ *
+ * Български: всяка сричка има точно една гласна (о·ко, я·бъл·ка). Когато между две гласни има
+ * две или повече съгласни, границата се избира по официалните правила за пренасяне на ИБЕ
+ * (шаблоните hyph-bg в js/vendor): поне една съгласна остава отляво и поне една отдясно
+ * (сес·тра, не се·стра; кос·ка, из·вест·ни, раз·де·ля). Ако шаблоните позволяват няколко места,
+ * избираме това, при което следващата сричка започва с естествена за българския група съгласни.
+ * Ако шаблоните не са заредени, се използват по-простите правила по-долу.
+ *
+ * Английски: опростени правила.
  */
 (function (global) {
   const BG_VOWELS = 'аъоуеияюѝэ';
   const BG_SONORANTS = 'йрлмн';
+
+  // ---------- официални шаблони за пренасяне (ако са заредени) ----------
+  let hyphenateBg = null;
+  try {
+    if (global.createHyphenator && global.hyphenationPatternsBg) {
+      hyphenateBg = global.createHyphenator(global.hyphenationPatternsBg, { hyphenChar: '­', minWordLength: 2 });
+    }
+  } catch (e) { hyphenateBg = null; }
+
+  /** Позициите в думата, на които правописът позволява пренасяне. */
+  function allowedBreaks(w) {
+    const set = new Set();
+    if (!hyphenateBg) return set;
+    let parts;
+    try { parts = hyphenateBg(w).split('­'); } catch (e) { return set; }
+    let p = 0;
+    for (let i = 0; i < parts.length - 1; i++) { p += parts[i].length; set.add(p); }
+    return set;
+  }
+
+  // групи от две съгласни, с които започват български думи (бл, гр, ст, зд, вк…)
+  const BG_ONSETS = new Set(('бл бр вг вд вж вз вк вл вм вн вп вр вс вт вх вц вч вш вщ гл гн гр дв дл дн др дж жд жл жн жр ' +
+    'зб зв зг зд зл зм зн зр кв кл кн кр кс кт мл мн мр пл пн пр пс пт пч пш св сг ск сл см сн сп ср ст сф сх сц сч ' +
+    'тв тк тл тм тр фл фр хв хл хм хр цв цр чв чл чр шв шк шл шм шп шт шр щр').split(' '));
+  /** Дали групата съгласни звучи естествено в началото на сричка. */
+  function naturalOnset(c) {
+    if (c.endsWith('ь')) c = c.slice(0, -1);
+    if (c.length <= 1) return true;
+    if (c.length > 3) return false;
+    for (let i = 0; i + 1 < c.length; i++) if (!BG_ONSETS.has(c.slice(i, i + 2))) return false;
+    return true;
+  }
   const EN_VOWELS = 'aeiouy';
   const EN_DIGRAPHS = ['ch', 'sh', 'th', 'ph', 'wh', 'gh', 'ck', 'qu'];
 
@@ -32,7 +72,37 @@
   // ---------- български ----------
   // дали две съгласни звучат естествено в началото на сричка (кл, тр, ст, зд…)
   const goodOnset = (c) => c.length < 2 || 'рлвй'.includes(c[1]) || 'сзшж'.includes(c[0]);
+
+  /** Срички по официалните правила (нужни са шаблоните hyph-bg). */
+  function cutsBgOfficial(w) {
+    const vowels = [];
+    for (let i = 0; i < w.length; i++) if (BG_VOWELS.includes(w[i])) vowels.push(i);
+    if (vowels.length < 2) return [];
+    const ok = allowedBreaks(w);
+    const cuts = [];
+    for (let k = 0; k < vowels.length - 1; k++) {
+      const a = vowels[k], b = vowels[k + 1];
+      const n = b - a - 1;                        // съгласни между двете гласни
+      if (n === 0) { cuts.push(b); continue; }    // по·е·зи·я
+      if (n === 1) { cuts.push(a + 1); continue; } // ви·со·чи·на
+      // 2+ съгласни: поне една отляво и поне една отдясно; „ь“ не се отделя от съгласната пред него
+      const cands = [];
+      for (let c = a + 2; c <= b - 1; c++) if (w[c] !== 'ь') cands.push(c);
+      if (!cands.length) { cuts.push(a + 1); continue; } // шо·фьор, ка·мьон
+      // предимство: място, позволено от правописа; после – естествено начало на следващата сричка;
+      // при равенство – по-лявото (сес·тра пред сест·ра)
+      let best = cands[0], bestScore = -1;
+      for (const c of cands) {
+        const s = (ok.has(c) ? 2 : 0) + (naturalOnset(w.slice(c, b)) ? 1 : 0);
+        if (s > bestScore) { bestScore = s; best = c; }
+      }
+      cuts.push(best);
+    }
+    return cuts;
+  }
+
   function cutsBg(w) {
+    if (hyphenateBg) return cutsBgOfficial(w);
     const vowels = [];
     for (let i = 0; i < w.length; i++) if (BG_VOWELS.includes(w[i])) vowels.push(i);
     if (vowels.length < 2) return [];
