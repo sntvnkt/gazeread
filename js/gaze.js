@@ -93,7 +93,9 @@ class GazeEngine {
   /** Отваря камерата; при неуспех опитва с все по-прости настройки (някои лаптопи не приемат 1280×720/30fps). */
   static async openCamera(deviceId) {
     const dev = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' };
+    // по-висока резолюция → повече пиксели за очите, когато човекът седи по-далеч от екрана
     const tries = [
+      { ...dev, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
       { ...dev, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
       { ...dev, width: { ideal: 640 }, height: { ideal: 480 } },
       deviceId ? { deviceId: { exact: deviceId } } : true,
@@ -127,6 +129,8 @@ class GazeEngine {
         const opts = (delegate) => ({
           baseOptions: { modelAssetPath: MODEL_URL, delegate },
           runningMode: 'VIDEO', numFaces: 1,
+          // по-ниски прагове: малко (далечно) лице все пак се намира и не се „губи“
+          minFaceDetectionConfidence: 0.3, minFacePresenceConfidence: 0.3, minTrackingConfidence: 0.3,
           outputFacialTransformationMatrixes: true, outputFaceBlendshapes: false,
         });
         try { this.landmarker = await FaceLandmarker.createFromOptions(fs, opts('GPU')); }
@@ -186,15 +190,17 @@ class GazeEngine {
     const f = this._features(P, mat, W, H);
     this.status.eyeWidth = f.eyeW;
     this.status.faceScale = f.faceScale;
+    this._distanceSamples.push({ eyeW: f.eyeW, faceH: f.faceH, t: now });
+    while (this._distanceSamples.length && now - this._distanceSamples[0].t > 3000) this._distanceSamples.shift();
     if (this._referenceEyeWidth) {
-      this.status.distanceRatio = f.eyeW / this._referenceEyeWidth;
-      this.status.distanceChanged = this.status.distanceRatio < 0.78 || this.status.distanceRatio > 1.28;
+      // медиана за последните ~0.5 s: при далечно лице ширината на окото „трепти“ от кадър на кадър
+      const recentW = median(this._distanceSamples.filter((s) => now - s.t <= 500).map((s) => s.eyeW));
+      this.status.distanceRatio = recentW / this._referenceEyeWidth;
+      this.status.distanceChanged = this.status.distanceRatio < 0.72 || this.status.distanceRatio > 1.38;
     } else {
       this.status.distanceRatio = null;
       this.status.distanceChanged = false;
     }
-    this._distanceSamples.push({ eyeW: f.eyeW, faceH: f.faceH, t: now });
-    while (this._distanceSamples.length && now - this._distanceSamples[0].t > 3000) this._distanceSamples.shift();
     // мигане: клепачите са много по-затворени от обичайното
     if (this.openBase === null) this.openBase = f.open;
     this.status.blink = f.open < this.openBase * 0.72;
@@ -206,10 +212,15 @@ class GazeEngine {
     this.recent.push({ f: f.vec, t: now });
     while (this.recent.length && now - this.recent[0].t > 3000) this.recent.shift();
     if (this.model) {
-      // медиана от последните 5 кадъра маха единичните „скокове“
+      // медиана от последните кадри маха единичните „скокове“;
+      // когато лицето е далеч (малки очи в кадъра), шумът е по-голям → гледаме повече кадри
+      const far = f.eyeW / (W || 1) < 0.022;
+      const win = far ? 9 : 5;
+      const cutoff = far ? 0.25 : 0.4;
+      if (this.fx.minCutoff !== cutoff) { this.fx.minCutoff = cutoff; this.fy.minCutoff = cutoff; }
       this._raw = this._raw || [];
       this._raw.push(this._predict(f.vec));
-      if (this._raw.length > 5) this._raw.shift();
+      while (this._raw.length > win) this._raw.shift();
       const x = median(this._raw.map((p) => p[0])), y = median(this._raw.map((p) => p[1]));
       const sx = this.fx.filter(x, now), sy = this.fy.filter(y, now);
       this.emit('gaze', sx, sy, { rawX: x, rawY: y });
