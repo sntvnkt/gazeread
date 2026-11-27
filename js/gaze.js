@@ -89,6 +89,41 @@ function upgradeLegacyFeatures(f) {
   return next;
 }
 
+// ---------- отблясъци ----------
+/** Почти бял, неоцветен пиксел – отблясък в очилата. */
+const isGlarePixel = (r, g, b) => {
+  const min = Math.min(r, g, b), max = Math.max(r, g, b);
+  return min > 245 && max - min < 28;
+};
+
+/**
+ * Чете RGB пиксели от суровия кадър на камерата (VideoFrame.copyTo).
+ * Поддържа NV12 и I420 (YUV) и RGBA/BGRA; за други формати хвърля грешка → резервният начин.
+ */
+function pixelReader(format, colorSpace, buf, layout) {
+  const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+  if (format === 'RGBA' || format === 'RGBX' || format === 'BGRA' || format === 'BGRX') {
+    const { offset, stride } = layout[0], bgr = format[0] === 'B';
+    return (x, y, out) => {
+      const i = offset + y * stride + x * 4;
+      out[0] = buf[i + (bgr ? 2 : 0)]; out[1] = buf[i + 1]; out[2] = buf[i + (bgr ? 0 : 2)];
+    };
+  }
+  if (format !== 'NV12' && format !== 'I420' && format !== 'I420A') throw new Error('format ' + format);
+  const bt709 = colorSpace && colorSpace.matrix === 'bt709';
+  const [cr, cgu, cgv, cb] = bt709 ? [1.5748, 0.1873, 0.4681, 1.8556] : [1.402, 0.344136, 0.714136, 1.772];
+  const full = !!(colorSpace && colorSpace.fullRange);
+  const Y = layout[0], U = layout[1], V = layout[2];
+  return (x, y, out) => {
+    let yy = buf[Y.offset + y * Y.stride + x], u, v;
+    if (format === 'NV12') { const i = U.offset + (y >> 1) * U.stride + (x >> 1) * 2; u = buf[i]; v = buf[i + 1]; }
+    else { u = buf[U.offset + (y >> 1) * U.stride + (x >> 1)]; v = buf[V.offset + (y >> 1) * V.stride + (x >> 1)]; }
+    if (full) { u -= 128; v -= 128; }
+    else { yy = (yy - 16) * 255 / 219; u = (u - 128) * 255 / 224; v = (v - 128) * 255 / 224; }
+    out[0] = clamp(yy + cr * v); out[1] = clamp(yy - cgu * u - cgv * v); out[2] = clamp(yy + cb * u);
+  };
+}
+
 // ---------- мимики ----------
 /*
  * MediaPipe дава оценки 0…1 за мимиките („blendshapes“). Усмивката повдига долния клепач,
@@ -275,6 +310,7 @@ class GazeEngine {
       this.status.eyeQuality = 0;
       this.status.glareLeft = 0; this.status.glareRight = 0; this.status.glareBoth = false;
       this._eyeGlareAt = -Infinity; this._lastEyeGlare = [0, 0];
+      this._glareToken = (this._glareToken || 0) + 1;   // недовършено измерване не бива да върне стари стойности
       this._raw = [];
       this.fx.reset(); this.fy.reset();
       this.emit('status', this.status);
@@ -353,34 +389,91 @@ class GazeEngine {
     }
   }
 
+  /**
+   * Отблясъци в очите (очила): дял от почти белите пиксели около всяко око, в мащаба на кадър 640×360.
+   * Взимането на кадъра от камерата е скъпо (целият Full HD кадър през canvas ≈ 25–40 ms, което
+   * насичаше страницата). Затова, където браузърът позволява, копираме само правоъгълника около
+   * очите с VideoFrame (≈ 5× по-бързо) и асинхронно; резултатът се ползва от следващия кадър.
+   */
   _measureEyeGlare(lm, W, H, now) {
-    if (now - this._eyeGlareAt < 150) return this._lastEyeGlare;
+    if (now - this._eyeGlareAt < 150 || this._glareBusy) return this._lastEyeGlare;
     this._eyeGlareAt = now;
-    const canvas = this._eyeCanvas, ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(this.video, 0, 0, canvas.width, canvas.height);
-    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-    const sx = canvas.width / W, sy = canvas.height / H;
-    const ratio = (eye) => {
+    const sx = 640 / W, sy = 360 / H;
+    const box = (eye) => {
       const a = lm[eye.a], b = lm[eye.b], up = lm[eye.up], low = lm[eye.low];
-      const left = Math.max(0, Math.floor((Math.min(a.x, b.x) * W - Math.abs(a.x - b.x) * W * 0.08) * sx));
-      const right = Math.min(canvas.width, Math.ceil((Math.max(a.x, b.x) * W + Math.abs(a.x - b.x) * W * 0.08) * sx));
       const padY = Math.abs(a.x - b.x) * W * 0.22;
-      const top = Math.max(0, Math.floor((Math.min(up.y, low.y) * H - padY) * sy));
-      const bottom = Math.min(canvas.height, Math.ceil((Math.max(up.y, low.y) * H + padY) * sy));
+      return {
+        left: Math.max(0, Math.floor((Math.min(a.x, b.x) * W - Math.abs(a.x - b.x) * W * 0.08) * sx)),
+        right: Math.min(640, Math.ceil((Math.max(a.x, b.x) * W + Math.abs(a.x - b.x) * W * 0.08) * sx)),
+        top: Math.max(0, Math.floor((Math.min(up.y, low.y) * H - padY) * sy)),
+        bottom: Math.min(360, Math.ceil((Math.max(up.y, low.y) * H + padY) * sy)),
+      };
+    };
+    const boxes = [box(L_EYE), box(R_EYE)];
+    if (typeof VideoFrame === 'function' && !this._noVideoFrame) {
+      this._glareBusy = true;
+      const token = this._glareToken = (this._glareToken || 0) + 1;
+      this._glareFromVideoFrame(boxes, W, H)
+        .then((g) => { if (g && token === this._glareToken) this._lastEyeGlare = g; })
+        .catch(() => { this._noVideoFrame = true; })      // неподдържан формат → резервният начин
+        .finally(() => { this._glareBusy = false; });
+      return this._lastEyeGlare;
+    }
+    // резервен начин: целият кадър, смален до 640×360 през canvas
+    const canvas = this._eyeCanvas, ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(this.video, 0, 0, 640, 360);
+    const pixels = ctx.getImageData(0, 0, 640, 360).data;
+    const ratio = ({ left, right, top, bottom }) => {
       let bright = 0, count = 0;
-      for (let y = top; y < bottom; y++) {
-        for (let x = left; x < right; x++) {
-          const i = (y * canvas.width + x) * 4;
-          const min = Math.min(pixels[i], pixels[i + 1], pixels[i + 2]);
-          const max = Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
-          if (min > 245 && max - min < 28) bright++;
-          count++;
-        }
+      for (let y = top; y < bottom; y++) for (let x = left; x < right; x++) {
+        const i = (y * 640 + x) * 4;
+        if (isGlarePixel(pixels[i], pixels[i + 1], pixels[i + 2])) bright++;
+        count++;
       }
       return count ? bright / count : 0;
     };
-    this._lastEyeGlare = [ratio(L_EYE), ratio(R_EYE)];
+    this._lastEyeGlare = boxes.map(ratio);
     return this._lastEyeGlare;
+  }
+
+  /** Копира само правоъгълника около очите (WebCodecs VideoFrame) и брои отблясъците в него. */
+  async _glareFromVideoFrame(boxes, W, H) {
+    const frame = new VideoFrame(this.video);
+    try {
+      const vr = frame.visibleRect, kx = vr.width / W, ky = vr.height / H;
+      const sx = 640 / W, sy = 360 / H;
+      // общ правоъгълник за двете очи, в пиксели на кадъра (четни координати заради 4:2:0)
+      const even = (v) => v & ~1;
+      const x0 = even(Math.max(0, Math.floor(Math.min(boxes[0].left, boxes[1].left) / sx * kx)));
+      const y0 = even(Math.max(0, Math.floor(Math.min(boxes[0].top, boxes[1].top) / sy * ky)));
+      const x1 = Math.min(vr.width, Math.ceil(Math.max(boxes[0].right, boxes[1].right) / sx * kx));
+      const y1 = Math.min(vr.height, Math.ceil(Math.max(boxes[0].bottom, boxes[1].bottom) / sy * ky));
+      const rw = even(x1 - x0), rh = even(y1 - y0);
+      if (rw <= 0 || rh <= 0) return [0, 0];
+      const rect = { x: vr.x + x0, y: vr.y + y0, width: rw, height: rh };
+      const buf = new Uint8Array(frame.allocationSize({ rect }));
+      const layout = await frame.copyTo(buf, { rect });
+      const rgb = pixelReader(frame.format, frame.colorSpace, buf, layout);
+      // както при смаляването до 640×360: всеки пиксел е средното на блок от кадъра
+      const bx = Math.max(1, Math.round(kx / sx)), by = Math.max(1, Math.round(ky / sy));
+      const out = [0, 0, 0];
+      return boxes.map(({ left, right, top, bottom }) => {
+        let bright = 0, count = 0;
+        for (let py = top; py < bottom; py++) for (let px = left; px < right; px++) {
+          const fx = Math.floor(px / sx * kx) - x0, fy = Math.floor(py / sy * ky) - y0;
+          let r = 0, g = 0, b = 0, n = 0;
+          for (let dy = 0; dy < by; dy++) for (let dx = 0; dx < bx; dx++) {
+            const xx = fx + dx, yy = fy + dy;
+            if (xx < 0 || yy < 0 || xx >= rw || yy >= rh) continue;
+            rgb(xx, yy, out); r += out[0]; g += out[1]; b += out[2]; n++;
+          }
+          if (!n) continue;
+          if (isGlarePixel(r / n, g / n, b / n)) bright++;
+          count++;
+        }
+        return count ? bright / count : 0;
+      });
+    } finally { frame.close(); }
   }
 
   _features(P, mat, W, H, glare = [0, 0]) {
