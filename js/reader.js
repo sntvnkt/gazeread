@@ -228,12 +228,90 @@
   // ---------------- текст от сайт ----------------
   const JUNK_IMG = /logo|icon|avatar|sprite|pixel|badge|emoji|\.svg(\?|$)|^data:/i;
 
+  const NON_CONTENT_LABEL = /^(?:home|menu|navigation|skip to content|search|subscribe|sign in|log in|share(?:\s+this(?:\s+.*)?)?|follow us|advertisement|sponsored|related articles|related stories|similar articles|tags|comments?|author\s*:.*|editor\s*:.*|published\s*:.*|начало|меню|навигация|търсене|абонирай се|вход|сподели(?: във .*)?|реклама|още по темата|етикети|коментари|редактор\s*:.*|автор\s*:.*)$/i;
+  const ARTICLE_META_LINE = /^(?:\d{1,2}[.:]\d{2}\s*[|–-]\s*)?\d{1,2}\s+\p{L}{3,}\s+\d{4}(?:\s*[-|].*)?$/iu;
+
+  function isLinkHeavyLine(line) {
+    const visible = line.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+    const links = [...visible.matchAll(/\[([^\]]*)\]\([^)]*\)/g)];
+    if (!links.length) return false;
+    const text = visible.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\d{1,2}:\d{2}\s*[|–-]?.*$/u, '').replace(/[#*_`]/g, '').trim();
+    const linkText = links.reduce((n, m) => n + m[1].length, 0);
+    return text.length > 0 && text.length <= 320 && linkText / text.length >= 0.62;
+  }
+
+  function hasArticleProse(text) {
+    return text.split(/\n+/).some((line) => {
+      const plain = line.replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/^#{1,6}\s*/, '').replace(/[>*_`]/g, '').trim();
+      return plain.length >= 120 && /[.!?…]/.test(plain);
+    });
+  }
+
+  function removeLinkOnlySections(md) {
+    const lines = md.split('\n');
+    const kept = [];
+    for (let i = 0; i < lines.length;) {
+      const heading = /^(#{1,6})\s+/.exec(lines[i]);
+      if (!heading) { kept.push(lines[i++]); continue; }
+      const level = heading[1].length;
+      let end = i + 1;
+      while (end < lines.length) {
+        const nextHeading = /^(#{1,6})\s+/.exec(lines[end]);
+        if (nextHeading && nextHeading[1].length <= level) break;
+        end++;
+      }
+      const section = lines.slice(i + 1, end);
+      const links = section.filter(isLinkHeavyLine).length;
+      if (!links || section.some(hasArticleProse)) kept.push(lines[i], ...section);
+      i = end;
+    }
+    return kept.join('\n');
+  }
+
+  function isShortLabelLine(line) {
+    if (/^#{1,6}\s/.test(line)) return false;
+    const label = line.replace(/^#{1,6}\s*/, '').replace(/^(?:[-*+]\s*)+/, '')
+      .replace(/[*_`]/g, '').trim();
+    return !!label && label.length <= 48 && label.split(/\s+/).length <= 4
+      && !/[.!?;:0-9]/.test(label) && !/\]\(/.test(label);
+  }
+
+  function removeShortLabelRuns(md) {
+    const lines = md.split('\n'), kept = [];
+    for (let i = 0; i < lines.length;) {
+      if (!isShortLabelLine(lines[i])) { kept.push(lines[i++]); continue; }
+      let end = i, labels = 0;
+      while (end < lines.length) {
+        if (isShortLabelLine(lines[end])) { labels++; end++; }
+        else if (!lines[end].trim()) end++;
+        else break;
+      }
+      if (labels < 5) kept.push(lines[i]);
+      i = labels < 5 ? i + 1 : end;
+    }
+    return kept.join('\n');
+  }
+
+  function isLinkListingMarkdown(md) {
+    return md.split('\n').filter(isLinkHeavyLine).length >= 8 && !hasArticleProse(md);
+  }
+
   // чисти markdown от r.jina.ai, като оставя само четимото съдържание
   function cleanMarkdown(md) {
     const title = (/^Title:\s*(.+)$/m.exec(md) || [])[1];
+    const listingPage = isLinkListingMarkdown(md);
     const start = md.indexOf('Markdown Content:');
     if (start >= 0) md = md.slice(start + 'Markdown Content:'.length);
-    md = md.replace(/\r/g, '')
+    md = removeShortLabelRuns(md.replace(/\r/g, ''));
+    md = removeLinkOnlySections(md).split('\n').filter((line) => {
+      if (isLinkHeavyLine(line)) return false;
+      const label = line.replace(/^#{1,6}\s*/, '').replace(/^(?:[-*+]\s*)+/, '')
+        .replace(/\[x\]\s*/i, '').replace(/[*_`]/g, '').trim();
+      return !NON_CONTENT_LABEL.test(label) && !ARTICLE_META_LINE.test(label) && !/^\/+$/.test(label);
+    }).join('\n')
       .replace(/```[^\n]*\n?/g, '')
       // заглавия от вида „Текст\n=====“
       .replace(/^(.+)\n=+\s*$/gm, '# $1').replace(/^(.+)\n-{3,}\s*$/gm, '## $1')
@@ -249,7 +327,7 @@
       .replace(/^[ \t]+(?=[-*+]\s|\d+[.)]\s)/gm, '')     // вложени списъци → обикновени
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-    if (title && !/^#\s/.test(md)) md = '# ' + title.trim() + '\n\n' + md;
+    if (title && !/^#{1,6}\s/m.test(md) && !listingPage) md = '# ' + title.trim() + '\n\n' + md;
     return md;
   }
 
@@ -308,10 +386,19 @@
   function contentScore(root) {
     const text = root.textContent.replace(/\s+/g, ' ').trim();
     if (text.length < 80) return 0;
+    let blocks = [...root.querySelectorAll('p,blockquote,pre')].map((el) => el.textContent.trim());
+    if (!blocks.some((s) => s.length >= 100)) {
+      blocks = [...root.querySelectorAll('div,section')]
+        .filter((el) => !el.querySelector('div,section'))
+        .map((el) => el.textContent.trim());
+    }
+    const prose = blocks.filter((s) => s.length >= 100 && /[.!?…]/.test(s));
+    if (!prose.length) return 0;
+    const proseLength = prose.reduce((n, s) => n + s.length, 0);
     const linkText = [...root.querySelectorAll('a')].reduce((n, a) => n + a.textContent.length, 0);
-    const paragraphs = root.querySelectorAll('p').length;
+    const linkDensity = Math.min(1, linkText / text.length);
     const semanticBonus = root.matches('article,[itemprop="articleBody"]') ? 500 : root.matches('main,[role="main"]') ? 250 : 0;
-    return text.length * (1 - 0.75 * Math.min(1, linkText / text.length)) + paragraphs * 100 + semanticBonus;
+    return proseLength * (1 - 0.8 * linkDensity) + prose.length * 150 + semanticBonus;
   }
 
   function htmlToText(html, base) {
@@ -329,6 +416,8 @@
     }
     const title = root.querySelector('h1')?.textContent.replace(/\s+/g, ' ').trim();
     const text = htmlToMarkdown(root, base, { includeImages: false });
+    const linkText = [...root.querySelectorAll('a')].reduce((n, a) => n + a.textContent.length, 0);
+    if (!hasArticleProse(text) && linkText / Math.max(1, root.textContent.length) > 0.35) return '';
     return title && !text.includes(title) ? `# ${title}\n\n${text}` : text;
   }
 
@@ -362,18 +451,36 @@
     try { new URL(url); } catch (e) { err.textContent = 'Адресът не изглежда правилен.'; return; }
     const btn = $('urlBtn'); btn.disabled = true; btn.textContent = '⏳ Зареждам…';
     let text = '';
+    let listingPage = false;
+    let jinaFailed = false;
     try {
-      const r = await fetch('https://r.jina.ai/' + url, { headers: { 'X-Return-Format': 'markdown' } });
+      const r = await fetch('https://r.jina.ai/' + url, {
+        headers: {
+          'X-Return-Format': 'markdown',
+          'X-Engine': 'browser',
+          'X-Retain-Images': 'false',
+          'X-Remove-Selector': 'nav,footer,aside,form,button,select,dialog,[role="navigation"],[role="complementary"],[role="menu"],[role="search"],[aria-hidden="true"],[class*="sidebar"],[id*="sidebar"],[class*="advert"],[id*="advert"]',
+        },
+      });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      text = cleanMarkdown(await r.text());
-    } catch (e1) {
+      const markdown = await r.text();
+      listingPage = isLinkListingMarkdown(markdown);
+      text = cleanMarkdown(markdown);
+    } catch (e) {
+      jinaFailed = true;
+    }
+    if (jinaFailed || !hasArticleProse(text)) {
       try {
         const r = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
         if (!r.ok) throw new Error('HTTP ' + r.status);
         text = htmlToText(await r.text(), url);
-      } catch (e2) { text = ''; }
+      } catch (e) { if (jinaFailed) text = ''; }
     }
     btn.disabled = false; btn.textContent = '⬇️ Вземи текста';
+    if (listingPage && !hasArticleProse(text)) {
+      err.textContent = 'Не открих основния текст за четене. Този адрес може да води към начална страница или списък с връзки; отвори страницата със самото съдържание и опитай с нейния адрес.';
+      return;
+    }
     if (!text || text.length < 20) {
       err.textContent = 'Не успях да взема текста от този сайт. Отвори страницата, копирай текста и го постави в „Постави текст“.';
       return;
