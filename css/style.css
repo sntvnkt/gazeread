@@ -180,8 +180,10 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 .error { color: #c43d3d; font-size: 15px; margin-top: 8px; }
 
 #readingArea {
+  color: var(--text);
   font-family: var(--read-font);
   font-size: var(--read-size, 26px);
+  font-weight: 500;
   line-height: var(--read-line, 2.2);
   letter-spacing: var(--read-spacing, .04em);
   word-spacing: var(--read-wspacing, .25em);
@@ -198,7 +200,7 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 #readingArea ul, #readingArea ol { margin: 0 0 1.1em; padding-left: 1.5em; }
 #readingArea li { margin: .2em 0; }
 #readingArea li::marker { color: var(--accent); }
-#readingArea blockquote { margin: 0 0 1.1em; padding: .1em 0 .1em 1em; border-left: 4px solid var(--accent); color: var(--muted); }
+#readingArea blockquote { margin: 0 0 1.1em; padding: .1em 0 .1em 1em; border-left: 4px solid var(--accent); color: var(--text); }
 #readingArea blockquote p { margin: 0 0 .4em; }
 #readingArea figure { margin: .6em 0 1.2em; }
 #readingArea figure img { display: block; max-width: 100%; max-height: 60vh; height: auto; margin: 0 auto; border-radius: 12px; object-fit: contain; }
