@@ -68,6 +68,24 @@ function ridge(X, ys, w, lambda) {  // връща тегла за всеки и�
 }
 
 const median = (arr) => { const s = [...arr].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const eyeReliability = (x, y2) => 1 / (1
+  + 8 * Math.max(0, Math.abs(x) - 0.55)
+  + 6 * Math.max(0, -0.2 - y2, y2 - 1.2));
+
+function upgradeLegacyFeatures(f) {
+  if (!Array.isArray(f) || f.length !== 24) return f;
+  const wl = eyeReliability(f[0], f[4]), wr = eyeReliability(f[2], f[5]);
+  const sum = wl + wr;
+  const x = (f[0] * wl + f[2] * wr) / sum;
+  const y = (f[1] * wl + f[3] * wr) / sum;
+  const y2 = (f[4] * wl + f[5] * wr) / sum;
+  const next = [...f];
+  next[0] = next[2] = x; next[1] = next[3] = y; next[4] = next[5] = y2;
+  next[6] = x * x; next[7] = y * y; next[8] = x * y; next[9] = y2 * y2;
+  next[15] = x * f[10]; next[16] = y * f[11];
+  next[17] = x * f[12]; next[18] = y * f[13];
+  return next;
+}
 
 // ---------- двигателят ----------
 class GazeEngine {
@@ -251,7 +269,10 @@ class GazeEngine {
       };
     };
     const l = eye(L_EYE), r = eye(R_EYE);
-    const ex = (l.x + r.x) / 2, ey = (l.y + r.y) / 2, ey2 = (l.y2 + r.y2) / 2;
+    const wl = eyeReliability(l.x, l.y2), wr = eyeReliability(r.x, r.y2), total = wl + wr;
+    const ex = (l.x * wl + r.x * wr) / total;
+    const ey = (l.y * wl + r.y * wr) / total;
+    const ey2 = (l.y2 * wl + r.y2 * wr) / total;
     const nose = P(1);
     const eyeW = (l.w + r.w) / 2;
     const top = P(10), chin = P(152), left = P(234), right = P(454);
@@ -264,8 +285,8 @@ class GazeEngine {
     let head;
     if (mat) head = [mat[8], mat[9], mat[12], mat[13], mat[14]];       // посока на лицето + позиция (см)
     else { head = [0, 0, nose.x / eyeW, nose.y / eyeW, 1 / eyeW]; }
-    // и двете очи поотделно (едното често се вижда по-добре) + средни стойности и квадрати за извивката
-    const vec = [l.x, l.y, r.x, r.y, l.y2, r.y2, ex * ex, ey * ey, ex * ey, ey2 * ey2,
+    // Сливаме двете очи; съмнителни ирисови точки (често от отражения в очила) тежат по-малко.
+    const vec = [ex, ey, ex, ey, ey2, ey2, ex * ex, ey * ey, ex * ey, ey2 * ey2,
       ...head, ex * head[0], ey * head[1], ex * head[2], ey * head[3],
       normalizedEyeW, normalizedFaceH, normalizedFaceW, faceScale, 1];
     return { vec, open: (l.open + r.open) / 2, eyeW, faceH, faceScale };
@@ -291,7 +312,7 @@ class GazeEngine {
     if (feats.length < 4) return 0;
     const d = feats[0].length;
     const med = Array.from({ length: d }, (_, j) => median(feats.map((f) => f[j])));
-    const dist = feats.map((f) => Math.hypot(f[0] - med[0], f[1] - med[1], f[2] - med[2] * 0.3));
+    const dist = feats.map((f) => Math.hypot(f[0] - med[0], f[1] - med[1], (f[4] - med[4]) * 0.3));
     const cut = median(dist) * 2.5 + 1e-6;
     let n = 0;
     feats.forEach((f, i) => { if (dist[i] <= cut) { this.samples.push({ f, x, y, w: weight, g: group }); n++; } });
@@ -323,7 +344,7 @@ class GazeEngine {
   clear() { this.samples = []; this.model = null; this.fx.reset(); this.fy.reset(); this._raw = []; }
 
   // ---------- запазване между сесиите ----------
-  static VERSION = 4;   // сменя се, ако признаците се променят → старите данни се игнорират
+  static VERSION = 5;   // сменя се, ако признаците се променят
 
   /** Запомня сегашното разстояние като еталон за калибриране и четене. */
   setDistanceReference() {
@@ -353,11 +374,12 @@ class GazeEngine {
 
   /** Зарежда запазени проби. Старите сесии тежат по-малко от новите. */
   importData(d) {
-    if (!d || d.v !== GazeEngine.VERSION || !Array.isArray(d.samples) || d.samples.length < 40) return false;
+    if (!d || ![4, GazeEngine.VERSION].includes(d.v) || !Array.isArray(d.samples) || d.samples.length < 40) return false;
     const sx = innerWidth / (d.w || innerWidth), sy = innerHeight / (d.h || innerHeight);
     const session = 'old' + (d.saved || 0) + ':';
     this.samples = d.samples.map(([f, x, y, w, g]) => ({
-      f, x: x * sx, y: y * sy, w: Math.max(0.2, (w || 1) * 0.6), g: g.startsWith('old') ? g : session + g,
+      f: d.v === 4 ? upgradeLegacyFeatures(f) : f,
+      x: x * sx, y: y * sy, w: Math.max(0.2, (w || 1) * 0.6), g: g.startsWith('old') ? g : session + g,
     }));
     this.fit(true);
     return !!this.model;
