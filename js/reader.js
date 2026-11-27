@@ -499,7 +499,7 @@
 
   // ---------------- текст от снимка (OCR с Tesseract.js – изцяло в браузъра) ----------------
   const OCR_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
-  let ocrScript = null, ocrWorker = null, ocrBusy = false;
+  let ocrScript = null, ocrBusy = false;
   let photoStream = null, photoOwnStream = false;
 
   function loadTesseract() {
@@ -528,28 +528,100 @@
     'initializing api': 'Подготвям разпознаването…',
     'recognizing text': 'Разпознавам текста…',
   };
-  async function getOcrWorker() {
-    if (ocrWorker) return ocrWorker;
+  // отделен модел за всеки език: само българският е по-точен от „български + английски“ заедно
+  const ocrWorkers = {};
+  async function getOcrWorker(lang) {
+    if (ocrWorkers[lang]) return ocrWorkers[lang];
     const T = await loadTesseract();
-    ocrWorker = await T.createWorker(['bul', 'eng'], 1, {
+    ocrWorkers[lang] = T.createWorker([lang], 1, {
       logger: (m) => {
         const label = OCR_STEPS[m.status];
         if (label) photoProgress(m.status === 'recognizing text' ? m.progress : m.progress * 0.15, label);
       },
-    });
-    return ocrWorker;
+    }).catch((e) => { delete ocrWorkers[lang]; throw e; });
+    return ocrWorkers[lang];
   }
 
-  /** Подготвя снимката: разумен размер (малките се увеличават) и сиви тонове – по-точно разпознаване. */
+  /** Средно на стойностите в квадрат с радиус r около всеки пиксел (чрез интегрално изображение). */
+  function boxMean(g, W, H, r) {
+    const I = new Float64Array((W + 1) * (H + 1));
+    for (let y = 1; y <= H; y++) {
+      let row = 0;
+      for (let x = 1; x <= W; x++) { row += g[(y - 1) * W + x - 1]; I[y * (W + 1) + x] = I[(y - 1) * (W + 1) + x] + row; }
+    }
+    const m = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      const y1 = Math.max(0, y - r), y2 = Math.min(H, y + r + 1);
+      for (let x = 0; x < W; x++) {
+        const x1 = Math.max(0, x - r), x2 = Math.min(W, x + r + 1);
+        m[y * W + x] = (I[y2 * (W + 1) + x2] - I[y1 * (W + 1) + x2] - I[y2 * (W + 1) + x1] + I[y1 * (W + 1) + x1]) / ((x2 - x1) * (y2 - y1));
+      }
+    }
+    return m;
+  }
+
+  /**
+   * Подготвя снимката за разпознаване:
+   *  • размер: големите се намаляват, малките (уеб камера) се увеличават – буквите стават по-високи;
+   *  • изравнява осветлението: всеки пиксел се дели на яркостта на хартията около него, така сенките
+   *    и тъмните ъгли изчезват, а меките ръбове на буквите остават (при тест със сянка: 59% → 8% грешки).
+   */
   function prepareImage(src, w, h) {
-    const longSide = Math.max(w, h);
-    const scale = longSide > 2600 ? 2600 / longSide : longSide < 1400 ? Math.min(2, 1400 / longSide) : 1;
+    const L = Math.max(w, h);
+    const scale = L > 2600 ? 2600 / L : L < 2000 ? Math.min(2.2, 2000 / L) : 1;
     const c = document.createElement('canvas');
-    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
-    const ctx = c.getContext('2d');
-    ctx.filter = 'grayscale(1) contrast(1.15)';
-    ctx.drawImage(src, 0, 0, c.width, c.height);
+    const W = c.width = Math.round(w * scale), H = c.height = Math.round(h * scale);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, W, H);
+    const d = ctx.getImageData(0, 0, W, H), px = d.data;
+    const g = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) g[i] = px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114;
+    // яркост на хартията: първо „изтриваме“ буквите (максимум в малка околност), после – средно в голяма
+    const r1 = Math.max(2, Math.round(L * scale / 300));
+    const lit = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        let v = 0;
+        for (let dy = -r1; dy <= r1; dy += r1) {
+          const yy = Math.min(H - 1, Math.max(0, y + dy)) * W;
+          for (let dx = -r1; dx <= r1; dx += r1) { const q = g[yy + Math.min(W - 1, Math.max(0, x + dx))]; if (q > v) v = q; }
+        }
+        lit[y * W + x] = v;
+      }
+    }
+    const paper = boxMean(lit, W, H, Math.max(8, Math.round(Math.max(W, H) / 50)));
+    for (let i = 0; i < W * H; i++) {
+      let v = (g[i] / Math.max(20, paper[i])) * 255;
+      v = (v - 60) * (255 / 175);                 // разтягане на контраста
+      v = v < 0 ? 0 : v > 255 ? 255 : v;
+      px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(d, 0, 0);
     return c;
+  }
+
+  /**
+   * Сглобява текста от редовете на Tesseract, като маха „шума“ в началото и края на редовете –
+   * символи от ръба на листа или масата („|“, „:“, „1“, самотно „а“ с ниска увереност).
+   * Истинските кратки думи („и“, „за“, „с“) имат висока увереност и вътре в реда не се пипат.
+   */
+  function textFromOcr(data) {
+    const junk = (w) => {
+      const t = w.text.trim();
+      if (!t) return true;
+      if (t.length > 2) return false;
+      if (!/\p{L}/u.test(t)) return w.confidence < 80;  // само цифри/знаци
+      return w.confidence < 50;                         // единична буква с ниска увереност
+    };
+    const paras = (data.paragraphs || []).map((p) => (p.lines || []).map((line) => {
+      const ws = (line.words || []).slice();
+      while (ws.length && junk(ws[0])) ws.shift();
+      while (ws.length && junk(ws[ws.length - 1])) ws.pop();
+      return ws.map((w) => w.text).join(' ');
+    }).filter(Boolean).join('\n'));
+    const text = paras.filter(Boolean).join('\n\n');
+    return text || data.text || '';
   }
 
   // латински букви, които изглеждат като кирилски – в българските думи ги заменяме
@@ -563,7 +635,7 @@
 
   /** Чисти разпознатия текст: пренесени думи, редове → абзаци, смесени букви. */
   function cleanOcrText(raw) {
-    let t = (raw || '').replace(/\r/g, '').replace(/[ \t]+/g, ' ');
+    let t = (raw || '').replace(/\r/g, '').replace(/(^|[ \t])[|¦](?=[ \t]|$)/gm, '$1').replace(/[ \t]+/g, ' ');
     t = t.replace(/(\p{L})[-­‐]\s*\n\s*(\p{Ll})/gu, '$1$2');           // при-\nключение → приключение
     const paras = t.split(/\n\s*\n/).map((p) => p
       .split('\n').map((l) => l.trim())
@@ -584,9 +656,19 @@
     $('photoCamBtn').disabled = true; $('photoFileBtn').disabled = true;
     photoProgress(0, 'Зареждам разпознаването…');
     try {
-      const worker = await getOcrWorker();
-      const { data } = await worker.recognize(canvas);
-      const text = cleanOcrText(data.text);
+      let { data } = await (await getOcrWorker('bul')).recognize(canvas);
+      // ниска увереност → може да е английски текст (българският модел го „превежда“ на кирилица):
+      // пробваме и английския модел и взимаме по-уверения (тест: английски текст – bul 51 / eng 95)
+      if (data.confidence < 75) {
+        const en = (await (await getOcrWorker('eng')).recognize(canvas)).data;
+        if (en.confidence > data.confidence + 10) data = en;
+      }
+      // текстът е твърде дребен или размазан – по-добре съвет, отколкото объркан текст
+      if (data.confidence < 50) {
+        err.textContent = 'Текстът на снимката е твърде дребен или размазан, за да се разчете надеждно. Приближи камерата към листа (текстът да заема почти целия кадър), задръж неподвижно и снимай при добра светлина.';
+        return;
+      }
+      const text = cleanOcrText(textFromOcr(data));
       // поне няколко истински думи и разумна увереност – иначе е „шум“ от фона, а не текст
       const realWords = (text.match(/\p{L}{3,}/gu) || []).length;
       if (realWords < 2 || data.confidence < 35) {
