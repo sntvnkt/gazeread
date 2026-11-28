@@ -1,7 +1,8 @@
 /*
  * GazeRead – профил на потребителя
- * Без акаунт: всичко се пази в този браузър (localStorage).
- * С акаунт: пази се и на сървъра, така че работи на всеки компютър.
+ * Без акаунт: всичко се пази в този браузър (localStorage); може да се пренесе на друг компютър с файл.
+ * С акаунт (само ако сайтът е пуснат с node server.js): пази се и на сървъра.
+ * Като статичен сайт (GitHub Pages, Netlify…) няма /api – тогава акаунтите просто не се показват.
  */
 (function () {
   const GUEST_KEY = 'gazeread.profile.guest';
@@ -45,6 +46,8 @@
     async init() {
       try {
         const me = await call('GET', '/api/me');
+        // някои хостинги връщат index.html (код 200) за всеки адрес – истинският сървър винаги дава { user: … }
+        if (!me || typeof me !== 'object' || !('user' in me)) throw new Error('no server');
         this.serverAvailable = true;
         if (me.user) {
           this.user = me.user;
@@ -62,6 +65,9 @@
 
     get(k, d) { return this.data[k] === undefined ? d : this.data[k]; },
     set(k, v) { this.data[k] = v; this.data.updatedAt = Date.now(); this.save(); },
+
+    /** Заменя целия профил (зареждане от файл) и го запазва веднага. */
+    async replace(data) { this.data = { ...data, updatedAt: Date.now() }; await this.save(true); },
 
     save(immediate) {
       const key = this.user ? userKey(this.user.username) : GUEST_KEY;

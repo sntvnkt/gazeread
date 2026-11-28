@@ -1850,6 +1850,8 @@
   const accDlg = $('accountDlg');
   let accMode = 'login';
   function renderAccount() {
+    // като статичен сайт няма сървър за акаунти → бутонът „Вход“ не се показва
+    $('accountBtn').hidden = !Profile.serverAvailable;
     $('accountBtn').textContent = Profile.user ? '👤 ' + Profile.user.username : '👤 Вход';
     $('accIn').hidden = !!Profile.user;
     $('accOut').hidden = !Profile.user;
@@ -1918,12 +1920,51 @@
     Adapt.load(null, hardWords); saveAdapt(); renderProfile(); toast('Личният модел започва отначало.');
   });
 
+  // ---------------- профил във файл (пренасяне на друг компютър без акаунт) ----------------
+  const PROFILE_KEYS = { settings: 'object', theme: 'string', text: 'string', hard: 'object', adapt: 'object', calib: 'object', calib_glasses: 'object' };
+  $('exportProfile').addEventListener('click', () => {
+    saveCalibration();
+    const profile = {};
+    for (const k of Object.keys(PROFILE_KEYS)) if (Profile.data[k] !== undefined) profile[k] = Profile.data[k];
+    const blob = new Blob([JSON.stringify({ app: 'GazeRead', version: 1, exported: new Date().toISOString(), profile })], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `gazeread-profil-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast('Профилът е запазен във файл ✔ Зареди го на другия компютър от „Моят профил“.', 5000);
+  });
+  $('importProfileBtn').addEventListener('click', () => $('importProfile').click());
+  $('importProfile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    let parsed = null;
+    try { parsed = JSON.parse(await file.text()); } catch (er) { /* не е JSON */ }
+    const src = parsed && parsed.app === 'GazeRead' && parsed.profile;
+    if (!src || typeof src !== 'object' || Array.isArray(src)) { toast('Този файл не е профил на GazeRead.', 5000); return; }
+    // само познатите части и с правилния вид – нищо друго от файла не се взима
+    const clean = {};
+    for (const [k, type] of Object.entries(PROFILE_KEYS)) {
+      const v = src[k];
+      if (v === null && type === 'object') clean[k] = null;
+      else if (v !== undefined && typeof v === type && !(type === 'object' && Array.isArray(v))) clean[k] = v;
+    }
+    if (!Object.keys(clean).length) { toast('Във файла няма данни за профил.', 5000); return; }
+    if (!confirm('Да заменя ли сегашния профил (калибриране, настройки, трудни думи) с този от файла?')) return;
+    await Profile.replace(clean);
+    location.reload();
+  });
+
   // ---------------- старт ----------------
   applySettings();
   renderHard();
   renderAccount();
   renderProfile();
-  if (location.hash === '#account') { setAccMode(accMode); accDlg.showModal(); history.replaceState(null, '', location.pathname); }
+  if (location.hash === '#account') {
+    if (Profile.serverAvailable) { setAccMode(accMode); accDlg.showModal(); }
+    history.replaceState(null, '', location.pathname);
+  }
   const saved = store.get('text', '');
   $('textIn').value = saved || SAMPLE;
   renderText(saved || SAMPLE);
